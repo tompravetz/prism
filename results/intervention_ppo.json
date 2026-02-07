@@ -1,0 +1,13 @@
+{
+  "algo": "ppo",
+  "n_states": 500,
+  "n_alternatives": 5,
+  "n_interventions": 2500,
+  "overall_change_rate": 0.756,
+  "mean_per_state_change_rate": 0.756,
+  "std_per_state_change_rate": 0.2903515111033521,
+  "median_per_state_change_rate": 0.8,
+  "p_value_vs_chance": 1.4088777842622497e-151,
+  "mean_concept_specificity": 0.4035761274249974,
+  "n_active_concepts": 64
+}

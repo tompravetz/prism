@@ -1,0 +1,14 @@
+{
+  "algo": "ppo",
+  "env": "CartPole",
+  "n_states": 200,
+  "n_alternatives": 5,
+  "n_concepts": 32,
+  "overall_change_rate": 0.441,
+  "mean_kl_divergence": 0.676404817039147,
+  "median_kl_divergence": 0.22579284012317657,
+  "max_kl_divergence": 3.770857810974121,
+  "frac_kl_above_0_1": 0.624,
+  "mean_concept_specificity": 1.0,
+  "n_active_concepts": 26
+}

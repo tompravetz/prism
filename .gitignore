@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large binary files — download separately)
+models/baseline/*.zip
+models/baseline/*.pt
+models/baseline/tb_logs/
+models/bottleneck/*.pt
+models/bottleneck/*.pkl
+models/bottleneck/opponents_*/
+models/simple/*.zip
+models/simple/*.pt
+models/simple/*.pkl
+models/vq/*.pt
+
+# Keep metrics and strategy JSONs (small, useful for analysis)
+!models/bottleneck/metrics_*.json
+!models/bottleneck/strategies_*.json
+
+# Results figures are generated — keep for reference
+# results/figures/*.png
+
+# Temporary files
+*.tmp
+*.bak
+scratchpad/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.synctex.gz

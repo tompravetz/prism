@@ -1,0 +1,215 @@
+{
+  "algo": "ppo",
+  "mode": "concept_level",
+  "baseline_win_rate": 0.958,
+  "n_concepts_tested": 20,
+  "n_significant_concepts": 2,
+  "concept_importance": {
+    "mean_kl_from_uniform": 1.0907893106341362,
+    "max_kl_from_uniform": 3.3202931880950928,
+    "mean_pairwise_kl": 1.7800577407488452,
+    "n_informative_concepts": 64
+  },
+  "ablation_results": [
+    {
+      "rank": 2,
+      "concept_id": 45,
+      "concept_frequency": 0.0678403399605403,
+      "concept_kl_from_uniform": 0.918632984161377,
+      "ablated_win_rate": 0.89,
+      "win_rate_drop": 0.06799999999999995,
+      "ablation_triggers": 1022,
+      "trigger_rate": 0.060437610881135424
+    },
+    {
+      "rank": 6,
+      "concept_id": 17,
+      "concept_frequency": 0.04811048717559569,
+      "concept_kl_from_uniform": 0.8824108839035034,
+      "ablated_win_rate": 0.906,
+      "win_rate_drop": 0.051999999999999935,
+      "ablation_triggers": 851,
+      "trigger_rate": 0.05165402124430956
+    },
+    {
+      "rank": 1,
+      "concept_id": 50,
+      "concept_frequency": 0.15768705418121112,
+      "concept_kl_from_uniform": 0.7460443377494812,
+      "ablated_win_rate": 0.936,
+      "win_rate_drop": 0.02199999999999991,
+      "ablation_triggers": 1789,
+      "trigger_rate": 0.104674975133111
+    },
+    {
+      "rank": 12,
+      "concept_id": 44,
+      "concept_frequency": 0.03217483684929428,
+      "concept_kl_from_uniform": 0.6633771061897278,
+      "ablated_win_rate": 0.942,
+      "win_rate_drop": 0.016000000000000014,
+      "ablation_triggers": 876,
+      "trigger_rate": 0.05175775480059084
+    },
+    {
+      "rank": 11,
+      "concept_id": 53,
+      "concept_frequency": 0.03369251783275155,
+      "concept_kl_from_uniform": 0.431276798248291,
+      "ablated_win_rate": 0.95,
+      "win_rate_drop": 0.008000000000000007,
+      "ablation_triggers": 1064,
+      "trigger_rate": 0.06191446028513238
+    },
+    {
+      "rank": 16,
+      "concept_id": 55,
+      "concept_frequency": 0.016846258916375777,
+      "concept_kl_from_uniform": 0.6242771148681641,
+      "ablated_win_rate": 0.95,
+      "win_rate_drop": 0.008000000000000007,
+      "ablation_triggers": 553,
+      "trigger_rate": 0.03267742126100573
+    },
+    {
+      "rank": 20,
+      "concept_id": 52,
+      "concept_frequency": 0.012748520261041129,
+      "concept_kl_from_uniform": 0.8859562277793884,
+      "ablated_win_rate": 0.95,
+      "win_rate_drop": 0.008000000000000007,
+      "ablation_triggers": 240,
+      "trigger_rate": 0.014166814237648309
+    },
+    {
+      "rank": 18,
+      "concept_id": 19,
+      "concept_frequency": 0.013052056457732584,
+      "concept_kl_from_uniform": 1.2984285354614258,
+      "ablated_win_rate": 0.956,
+      "win_rate_drop": 0.0020000000000000018,
+      "ablation_triggers": 393,
+      "trigger_rate": 0.023813852026904198
+    },
+    {
+      "rank": 7,
+      "concept_id": 35,
+      "concept_frequency": 0.04143269084838367,
+      "concept_kl_from_uniform": 0.2539781928062439,
+      "ablated_win_rate": 0.958,
+      "win_rate_drop": 0.0,
+      "ablation_triggers": 801,
+      "trigger_rate": 0.04657247514390372
+    },
+    {
+      "rank": 17,
+      "concept_id": 58,
+      "concept_frequency": 0.01335559265442404,
+      "concept_kl_from_uniform": 0.5185829401016235,
+      "ablated_win_rate": 0.958,
+      "win_rate_drop": 0.0,
+      "ablation_triggers": 222,
+      "trigger_rate": 0.013172728890998636
+    },
+    {
+      "rank": 19,
+      "concept_id": 12,
+      "concept_frequency": 0.012900288359386856,
+      "concept_kl_from_uniform": 0.35024508833885193,
+      "ablated_win_rate": 0.958,
+      "win_rate_drop": 0.0,
+      "ablation_triggers": 357,
+      "trigger_rate": 0.021106775452288045
+    },
+    {
+      "rank": 5,
+      "concept_id": 60,
+      "concept_frequency": 0.04993170435574442,
+      "concept_kl_from_uniform": 0.7730270624160767,
+      "ablated_win_rate": 0.962,
+      "win_rate_drop": -0.0040000000000000036,
+      "ablation_triggers": 592,
+      "trigger_rate": 0.03544273483805305
+    },
+    {
+      "rank": 14,
+      "concept_id": 31,
+      "concept_frequency": 0.029139474882379723,
+      "concept_kl_from_uniform": 0.3790615499019623,
+      "ablated_win_rate": 0.962,
+      "win_rate_drop": -0.0040000000000000036,
+      "ablation_triggers": 535,
+      "trigger_rate": 0.031378299120234605
+    },
+    {
+      "rank": 3,
+      "concept_id": 25,
+      "concept_frequency": 0.05767187737137654,
+      "concept_kl_from_uniform": 0.288353830575943,
+      "ablated_win_rate": 0.964,
+      "win_rate_drop": -0.006000000000000005,
+      "ablation_triggers": 854,
+      "trigger_rate": 0.04986278974718281
+    },
+    {
+      "rank": 15,
+      "concept_id": 61,
+      "concept_frequency": 0.020792229473364697,
+      "concept_kl_from_uniform": 0.897859513759613,
+      "ablated_win_rate": 0.964,
+      "win_rate_drop": -0.006000000000000005,
+      "ablation_triggers": 311,
+      "trigger_rate": 0.018538388173581305
+    },
+    {
+      "rank": 8,
+      "concept_id": 16,
+      "concept_frequency": 0.04067385035665503,
+      "concept_kl_from_uniform": 0.6621820330619812,
+      "ablated_win_rate": 0.966,
+      "win_rate_drop": -0.008000000000000007,
+      "ablation_triggers": 933,
+      "trigger_rate": 0.05474388311916916
+    },
+    {
+      "rank": 4,
+      "concept_id": 4,
+      "concept_frequency": 0.057520109273030806,
+      "concept_kl_from_uniform": 0.6999670267105103,
+      "ablated_win_rate": 0.968,
+      "win_rate_drop": -0.010000000000000009,
+      "ablation_triggers": 839,
+      "trigger_rate": 0.04905858963863875
+    },
+    {
+      "rank": 13,
+      "concept_id": 43,
+      "concept_frequency": 0.029594779177416906,
+      "concept_kl_from_uniform": 0.5708258748054504,
+      "ablated_win_rate": 0.968,
+      "win_rate_drop": -0.010000000000000009,
+      "ablation_triggers": 662,
+      "trigger_rate": 0.03839016469496637
+    },
+    {
+      "rank": 9,
+      "concept_id": 7,
+      "concept_frequency": 0.040370314159963575,
+      "concept_kl_from_uniform": 1.1155245304107666,
+      "ablated_win_rate": 0.97,
+      "win_rate_drop": -0.01200000000000001,
+      "ablation_triggers": 730,
+      "trigger_rate": 0.043733525041936255
+    },
+    {
+      "rank": 10,
+      "concept_id": 59,
+      "concept_frequency": 0.0361208074062832,
+      "concept_kl_from_uniform": 0.2995782196521759,
+      "ablated_win_rate": 0.97,
+      "win_rate_drop": -0.01200000000000001,
+      "ablation_triggers": 637,
+      "trigger_rate": 0.03728634980098337
+    }
+  ]
+}
