@@ -1,1 +1,1 @@
-# Experiment scripts for ASTRIA
+# Experiment scripts for PRISM

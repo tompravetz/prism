@@ -40,7 +40,6 @@ from src.environments.go_env import GoEnv
 from src.networks import GoCNNEncoder
 from src.concept_manager import ConceptManager
 from src.concept_policy import ConceptBottleneckPolicy, ConceptDQNPolicy
-from src.strategy_memory import StrategyMemory
 from src.utils import get_device, ensure_dir, set_seed
 
 

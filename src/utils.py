@@ -1,5 +1,5 @@
 """
-Shared utilities for ASTRIA.
+Shared utilities for PRISM.
 
 Board rendering, seeding, device selection, logging helpers.
 """

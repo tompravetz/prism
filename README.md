@@ -1,145 +1,155 @@
-# ASTRIA: Unsupervised Concept Bottleneck Models for Interpretable RL
+# PRISM: Policy Reuse via Interpretable Strategy Mapping
 
-**A**utonomous **St**rategy **R**easoning via **I**nterpretable **A**gents
+**Concept-mediated strategy transfer for reinforcement learning agents**
 
-ASTRIA forces reinforcement learning agents to reason through discrete concepts discovered via unsupervised clustering -- requiring **zero human supervision** for concept definition. Unlike prior work (e.g., SCoBots, Delfosse et al. NeurIPS 2024) that requires hand-labeled concepts, ASTRIA discovers concepts automatically from trained encoder features.
+---
+
+## Overview
+
+PRISM discovers discrete concepts from trained RL encoders using K-means clustering, creating a universal interface layer between observation encoding and policy execution. By aligning concept spaces across different agents via Hungarian matching, PRISM enables zero-shot policy transfer between agents trained with different algorithms (PPO, DQN, DAgger), across different domains (Go, CartPole, LunarLander, Acrobot), and across task scales (Go 5x5 to 7x7 curriculum transfer).
 
 ## Architecture
 
 ```
-Board (7x7x3) --> CNN Encoder --> 128D Features --> K-means --> Concept ID (0-63) --> Bottleneck Policy --> Action
-     |                |                                |                                    |
-  [Stage 1]      [Frozen]                        [Stage 2]                             [Stage 3]
-  Train RL      Reuse encoder                  Unsupervised                       Policy sees ONLY
-  baseline      features                       discovery                          a single integer
+                        PRISM Concept Bottleneck Pipeline
+
+  +-------------+     +---------+     +----------+     +------------+     +------------------+     +--------+
+  | Observation | --> | Encoder | --> | 128D     | --> | K-means    | --> | Bottleneck       | --> | Action |
+  |             |     |         |     | Features |     | Concept ID |     | Policy           |     |        |
+  +-------------+     +---------+     +----------+     +------------+     +------------------+     +--------+
+
+  Stage 1: Train encoder + policy end-to-end with standard RL (PPO / DQN / DAgger)
+  Stage 2: Freeze encoder, cluster 128D features into 64 discrete concepts via K-means
+  Stage 3: Train bottleneck policy mapping concept IDs directly to actions
+
+  Transfer: Align source/target concept spaces with Hungarian matching, then reuse policy
 ```
 
-**Key insight**: A single integer (6 bits) is sufficient for 92-100% win rates on Go 7x7, despite the observation containing 4,704 bits.
+## Installation
 
-## Results Summary
+```bash
+# Clone the repository
+git clone https://github.com/tompravetz/prism.git
+cd prism
 
-| Metric | PPO Bottleneck | DQN Bottleneck | VQ End-to-End |
-|--------|---------------|---------------|---------------|
-| Win Rate (Best) | **100%** | 96% | 92% |
-| Causal Intervention | **81.2%** (p < 1e-200) | -- | -- |
-| Active Concepts | 64/64 | 64/64 | -- |
-| Concept Pairwise KL | 1.72 | -- | -- |
+# Create and activate a virtual environment
+python -m venv venv
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # Linux / macOS
 
-**Cross-domain**: Also validated on CartPole (KL divergence = 0.676 under intervention).
-
-## Project Structure
-
-```
-astria/
-  train_baseline.py          # Stage 1: Train PPO/DQN encoders
-  train_bottleneck.py        # Stage 3: Train concept bottleneck policies
-  train_vq.py                # Alternative: VQ-VAE end-to-end training
-  train_simple.py            # CartPole cross-domain experiments
-  evaluate.py                # Baseline vs bottleneck comparison
-
-  src/
-    networks.py              # CNN (Go) and MLP (CartPole) encoders
-    concept_manager.py       # K-means concept discovery (Stage 2)
-    concept_policy.py        # Bottleneck policy architecture
-    strategy_memory.py       # Concept-action-outcome tracking
-    vq_layer.py              # Vector Quantization with straight-through estimator
-    dynamics_model.py        # P(concept_t+1 | concept_t, action_t) predictor
-    opponent_pool.py         # Self-play opponent management
-    environments/
-      go_env.py              # Go 7x7 wrapper (PettingZoo -> Gymnasium)
-      simple_env.py          # CartPole/LunarLander wrappers
-
-  experiments/
-    intervention.py          # Causal concept override (key experiment)
-    ablation.py              # Concept importance via ablation
-    stability.py             # Rotation invariance testing
-    dynamics.py              # Concept dynamics accuracy
-    simple_intervention.py   # CartPole intervention
-
-  analysis/
-    figures.py               # Generate all paper figures
-    visualize.py             # Individual plot functions
-    concept_viz.py           # t-SNE, board examples, transition graphs
-
-  paper/
-    astria.tex               # Full research report (LaTeX)
-
-  results/                   # Experiment outputs (JSON + figures)
-  models/                    # Trained models (not in repo -- see below)
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ## Quick Start
 
-### Setup
 ```bash
-python -m venv venv
-venv\Scripts\activate        # Windows
-pip install torch stable-baselines3 sb3-contrib pettingzoo gymnasium scikit-learn matplotlib seaborn
+# 1. Train a baseline RL agent
+python train_baseline.py --algo ppo
+
+# 2. Discover concepts and train the bottleneck policy
+python train_bottleneck.py --algo ppo --generations 100
+
+# 3. Run same-task agent-to-agent transfer
+python experiments/transfer_same_task.py
+
+# 4. Run cross-domain transfer
+python experiments/transfer_cross_domain.py
 ```
 
-### Reproduce All Results
-```bash
-# Stage 1: Train baselines (~30 min)
-python train_baseline.py --env go --algo ppo --steps 200000
-python train_baseline.py --env go --algo dqn --steps 200000
+## Project Structure
 
-# Stages 2-3: Discover concepts & train bottleneck (~60 min)
-python train_bottleneck.py --algo both --generations 100 --steps-per-gen 20000
-
-# Run all experiments (~20 min)
-python experiments/intervention.py
-python experiments/stability.py
-python experiments/ablation.py
-python experiments/dynamics.py
-
-# Cross-domain (CartPole)
-python train_simple.py
-python experiments/simple_intervention.py
-
-# VQ-VAE variant
-python train_vq.py --generations 100 --steps-per-gen 20000
-
-# Generate figures
-python analysis/figures.py
-python analysis/concept_viz.py --algo ppo
+```
+prism/
+├── src/
+│   ├── environments/          # Environment wrappers (Go, CartPole, LunarLander, Acrobot)
+│   ├── networks.py            # CNN/MLP encoders and policy/Q-value heads
+│   ├── concept_manager.py     # K-means concept discovery
+│   ├── concept_policy.py      # Bottleneck policy (concept ID -> action)
+│   ├── concept_aligner.py     # Hungarian matching for concept space alignment
+│   ├── strategy_library.py    # Cross-domain strategy registry and retrieval
+│   └── utils.py               # Shared utility functions
+├── experiments/
+│   ├── transfer_same_task.py      # Agent-to-agent transfer within Go 7x7
+│   ├── transfer_cross_domain.py   # Transfer across different domains
+│   ├── transfer_baselines.py      # Baseline comparisons for transfer
+│   ├── strategy_composition.py    # Composing specialist strategies
+│   ├── curriculum.py              # 5x5 -> 7x7 curriculum transfer
+│   ├── strategy_library_demo.py   # Strategy library demonstration
+│   ├── transitive_transfer.py    # Transitive alignment composition
+│   ├── alignment_comparison.py  # Alignment method comparison (5 methods)
+│   ├── transfer_prediction.py   # Transfer quality prediction analysis
+│   └── cross_domain.py           # LunarLander PRISM pipeline
+├── analysis/
+│   ├── create_hero_figure.py          # Main paper figure generation
+│   ├── cross_domain_analysis.py       # Cross-domain transfer analysis
+│   ├── concept_interpretation.py      # Concept visualization and interpretation
+│   ├── saliency_comparison.py         # Saliency map comparisons
+│   ├── failure_analysis.py            # Failure mode categorization
+│   └── concept_quality_metrics.py     # Quantitative concept quality metrics
+├── paper/
+│   └── prism.tex              # LaTeX source
+├── train_baseline.py          # Baseline RL training (SB3 MaskablePPO / DQN)
+├── train_bottleneck.py        # Generational concept bottleneck training
+├── train_cloned.py            # Behavioral cloning training
+├── run_dagger_pipeline.py     # DAgger training loop + evaluation
+├── eval_gnugo.py              # GnuGo evaluation harness
+├── requirements.txt
+└── README.md
 ```
 
-## Key Experiments
+## Key Results
 
-### 1. Causal Intervention (81.2% action change)
-Override the concept assignment and measure whether the agent's action changes. Result: 81.2% change rate (p < 1e-200), proving concepts causally determine behavior.
+All results reported as mean over 5 independent seeds.
 
-### 2. Concept Ablation (1 critical concept found)
-Disable individual concepts during gameplay. Concept C17 drops win rate by 5.4% -- removing it makes the agent lose games it would otherwise win.
+### Same-Task Transfer (Go 7x7, Win Rate vs Random Opponent)
 
-### 3. Concept Dynamics (52% top-1, 76% top-5)
-A simple model predicting next concept from (current concept, action) achieves 52% accuracy (vs 1.6% random baseline), showing temporal structure in concept space.
+| Source | Target | Alignment | Win Rate (5 seeds) |
+|:-------|:-------|:---------:|:------------------:|
+| PPO    | DQN    | 0.262     | 92.0% ± 2.6       |
+| PPO    | DAgger | 0.310     | 90.6% ± 2.2       |
+| DQN    | PPO    | 0.262     | 64.4% ± 6.1       |
+| DQN    | DAgger | 0.240     | 64.4% ± 4.0       |
+| DAgger | PPO    | 0.310     | 55.2% ± 8.2       |
+| DAgger | DQN    | 0.240     | 53.6% ± 3.0       |
 
-### 4. Cross-Domain (CartPole KL = 0.676)
-Same pipeline applied to CartPole with MLP encoder. Concepts meaningfully shift action distributions (KL divergence = 0.676), confirming domain-agnosticism.
+RL-trained agents (PPO, DQN) transfer well to each other; DAgger (behavioral cloning) transfers less effectively, consistent with richer concept utilization by RL encoders.
 
-## Comparison with Prior Work
+### Cross-Domain Transfer (Fine-Tuned Improvement over From-Scratch)
 
-| | SCoBots (Delfosse et al., NeurIPS 2024) | ASTRIA (Ours) |
-|---|---|---|
-| Concept source | **Supervised** (object labels required) | **Unsupervised** (K-means + VQ-VAE) |
-| Human labels needed | Yes | **No** |
-| Environments | Atari | Go 7x7 + CartPole |
-| Algorithms compared | Single | PPO vs DQN |
-| Differentiable variant | No | VQ-VAE end-to-end |
-| Dynamics modeling | No | Yes (52% accuracy) |
+| Source      | Target      | Alignment | Improvement |
+|:------------|:------------|:---------:|:-----------:|
+| CartPole    | LunarLander | 0.428     | +21.1%      |
+| LunarLander | CartPole    | 0.428     | +8.6%       |
+| Acrobot     | LunarLander | 0.413     | +4.2%       |
+| Acrobot     | CartPole    | 0.407     | +4.1%       |
+| CartPole    | Acrobot     | 0.407     | -1.1%       |
+| LunarLander | Acrobot     | 0.413     | -8.0%       |
+
+4 of 6 cross-domain pairs show positive transfer (4--21% improvement).
+
+### Curriculum Transfer (Go 5x5 → 7x7, 5 seeds)
+
+| Method                  | Final Win Rate | Generations to 95% |
+|:------------------------|:--------------:|:-------------------:|
+| Transferred + fine-tune | 96.4% ± 3.7   | 26.0 ± 4.9         |
+| From scratch            | 94.0% ± 5.1   | 35.0 ± 6.3         |
+| **Speedup**             |                | **1.35x** (p=0.027) |
+
+## Paper
+
+The full paper is available at [`paper/prism.tex`](paper/prism.tex) (23 pages, 6 figures). It includes an information-theoretic transfer bound, transitive alignment composition analysis, and five alignment method comparisons.
 
 ## Citation
 
 ```bibtex
-@misc{kumar2026astria,
-  title={ASTRIA: Unsupervised Concept Bottleneck Models for Interpretable Reinforcement Learning},
+@article{pravetz2026prism,
+  title={{PRISM}: Policy Reuse via Interpretable Strategy Mapping},
   author={Pravetz, Thomas},
-  year={2026},
-  note={Available at: github.com/tompravetz/astria}
+  year={2026}
 }
 ```
 
 ## License
 
-MIT
+This project is released under the MIT License.

@@ -1,5 +1,5 @@
 """
-Visualization utilities for ASTRIA results.
+Visualization utilities for PRISM results.
 
 Generates individual plots and visualizations used throughout the analysis.
 For the complete figure generation pipeline, see figures.py.
@@ -139,16 +139,10 @@ def plot_concept_usage_heatmap(strategy_memory_path, n_concepts=64,
     """
     setup_style()
 
-    # Load strategy data
-    if strategy_memory_path.endswith(".json"):
-        with open(strategy_memory_path) as f:
-            data = json.load(f)
-        concept_dist = data.get("concept_distribution", {})
-    else:
-        from src.strategy_memory import StrategyMemory
-        sm = StrategyMemory(n_concepts=n_concepts, n_actions=50)
-        sm.load(strategy_memory_path)
-        concept_dist = sm.get_concept_distribution()
+    # Load strategy data (JSON format)
+    with open(strategy_memory_path) as f:
+        data = json.load(f)
+    concept_dist = data.get("concept_distribution", {})
 
     # Create grid
     grid_size = int(np.ceil(np.sqrt(n_concepts)))

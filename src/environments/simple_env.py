@@ -104,6 +104,53 @@ class CartPoleConceptEnv(gym.Wrapper):
         return obs.astype(np.float32), reward, terminated, truncated, info
 
 
+class MountainCarConceptEnv(gym.Wrapper):
+    """
+    MountainCar wrapper with interface matching GoEnv.
+
+    MountainCar-v0 (Classic Control):
+        - A car must drive up a steep hill by building momentum
+        - Goal: reach the flag at the top of the right hill
+        - Episode ends when the car reaches the goal or after 200 steps
+
+    Observation (2D continuous vector):
+        [0] Position: float in [-1.2, 0.6]
+        [1] Velocity: float in [-0.07, 0.07]
+
+    Actions (3 discrete):
+        0 = Push left
+        1 = No push (coast)
+        2 = Push right
+
+    Reward: -1 for each step (encourages reaching the goal quickly).
+    """
+
+    def __init__(self, render_mode=None):
+        """
+        Args:
+            render_mode: "human" for visual rendering, None for headless.
+        """
+        env = gym.make("MountainCar-v0", render_mode=render_mode)
+        super().__init__(env)
+        self._action_count = 3  # Left, nothing, right
+
+    def action_masks(self):
+        """All actions always legal in MountainCar."""
+        return np.ones(self._action_count, dtype=np.int8)
+
+    def reset(self, seed=None, options=None):
+        """Reset MountainCar and add action_mask to info."""
+        obs, info = self.env.reset(seed=seed, options=options)
+        info["action_mask"] = self.action_masks()
+        return obs.astype(np.float32), info
+
+    def step(self, action):
+        """Take a step in MountainCar."""
+        obs, reward, terminated, truncated, info = self.env.step(int(action))
+        info["action_mask"] = self.action_masks()
+        return obs.astype(np.float32), reward, terminated, truncated, info
+
+
 class LunarLanderConceptEnv(gym.Wrapper):
     """
     LunarLander wrapper with interface matching GoEnv.

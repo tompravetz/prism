@@ -1,5 +1,5 @@
 """
-Generate all publication-quality figures for the ASTRIA paper.
+Generate all publication-quality figures for the PRISM paper.
 
 This is the "one-click" figure generation script. Run it after all
 experiments are complete to produce every figure needed for the paper.

@@ -1,0 +1,982 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================================
+% Packages
+% ============================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage[margin=1in]{geometry}
+\usepackage{natbib}
+\usepackage{enumitem}
+
+% Support compilation from project root (pdflatex paper/prism.tex)
+% or from paper/ directory (pdflatex prism.tex)
+\graphicspath{{}{results/figures/}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+% Custom commands
+\newcommand{\prism}{\textsc{Prism}}
+\newcommand{\concept}{\mathcal{C}}
+\newcommand{\encoder}{f_\theta}
+\newcommand{\policy}{\pi_\phi}
+\newcommand{\KL}{\mathrm{KL}}
+
+\title{
+\textbf{{\textsc{Prism}}: Policy Reuse via Interpretable Strategy Mapping\\in Reinforcement Learning}
+}
+
+\author{
+Thomas Pravetz\\
+\texttt{github.com/tompravetz/prism}
+}
+
+\date{February 2026}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+% Abstract
+% ============================================================
+\begin{abstract}
+Reinforcement learning agents develop strategies through millions of interactions, yet their knowledge remains trapped in opaque neural network weights---unable to be shared between agents, transferred across domains, or composed into new strategies. We present \prism{} (\textbf{P}olicy \textbf{R}euse via \textbf{I}nterpretable \textbf{S}trategy \textbf{M}apping), a framework that discovers discrete strategic concepts through unsupervised clustering and uses them as a universal interface for strategy transfer. Across six agent-to-agent transfer pairs on Go~7$\times$7, concept alignment achieves 54--92\% zero-shot win rate (5 seeds), with RL-trained encoders producing significantly more transferable concepts than imitation learning ($p < 0.001$). We introduce the first study of \emph{transitive} concept alignment, showing that chained transfer through strong intermediaries can match or exceed direct transfer. Curriculum transfer from Go~5$\times$5 to 7$\times$7 yields a 1.35$\times$ convergence speedup ($p = 0.027$, 5 seeds), and cross-domain transfer shows positive trends (4/6 pairs improve by 4--21\%) though high baseline variance prevents statistical significance at 5 seeds. Systematic comparison of five alignment methods reveals that the key factor is alignment itself---not the specific algorithm---with Hungarian matching, Procrustes, and greedy methods all achieving $\sim$92\% win rate versus 66\% without alignment ($p < 0.001$). We validate that concepts are causally meaningful (75.6\% intervention change rate, $p < 10^{-151}$) and stable (ARI $> 0.87$), establishing discrete concept bottlenecks as a viable common language for strategy transfer.
+\end{abstract}
+
+\textbf{Keywords:} Strategy Transfer, Concept Bottleneck Models, Reinforcement Learning, Unsupervised Concept Discovery, Knowledge Reuse
+
+% ============================================================
+% 1. Introduction
+% ============================================================
+\section{Introduction}
+
+Reinforcement learning agents learn strategies through millions of environment interactions, yet the knowledge they develop is trapped inside opaque neural network weights. When a new agent is trained on the same task with a different algorithm, or on a related task in a different domain, it must start from scratch---none of the strategic knowledge transfers. For example, if a PPO agent masters Go~7$\times$7 through 500K training steps, and we then train a DQN agent on the same task, the DQN agent cannot reuse any of PPO's strategic knowledge---it must rediscover winning patterns from scratch. This is strikingly different from human expertise, where strategies can be articulated, shared between individuals, and adapted to new situations.
+
+The core problem is \emph{representation}: neural network features are continuous, high-dimensional, and entangled, making them resistant to extraction, comparison, or transfer. What if agents instead reasoned through discrete, structured representations that could serve as a common language for strategy?
+
+We propose \prism{}, a framework that discovers discrete strategic concepts and uses them as a \emph{universal interface} for strategy transfer between reinforcement learning agents (achieving 54--92\% zero-shot win rate across six transfer pairs; Section~\ref{sec:agent_transfer}). Our key insight is that trained RL encoders already learn features capturing strategically relevant information. By clustering these features with K-means, we obtain discrete concepts that are:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Causally grounded}: Intervention experiments show concepts genuinely determine agent behavior (75.6\% action change, $p < 10^{-151}$).
+    \item \textbf{Algorithm-independent}: Concepts from PPO, DQN, and behavioral cloning encoders can be aligned via centroid similarity.
+    \item \textbf{Transferable}: Aligned concepts enable zero-shot policy transfer---a policy trained with one agent's concepts can execute using another agent's concepts after remapping.
+    \item \textbf{Preliminarily composable}: Phase-based routing between specialist agents demonstrates that the composition mechanism works in principle, though specialist quality remains a bottleneck (Section~\ref{sec:composition_results}).
+\end{enumerate}
+
+The \prism{} pipeline operates through three stages:
+\[
+\text{Observation} \xrightarrow{\text{Encoder}} \text{128D Features} \xrightarrow{\text{K-means}} \text{Concept ID} \xrightarrow{\text{Bottleneck Policy}} \text{Action}
+\]
+
+Because all encoders produce 128-dimensional feature vectors regardless of the observation space (CNN for Go boards, MLP for continuous control), K-means centroids from \emph{any} encoder live in the same dimensionality. This enables concept alignment across agents, algorithms, and even domains---the concept layer is the universal transfer interface.
+
+Our contributions are:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Concept alignment framework}: Principled alignment of discrete concept spaces via Hungarian matching, Procrustes, or greedy methods, enabling zero-shot and warm-start policy transfer.
+    \item \textbf{Source quality hierarchy}: The finding that RL-trained encoders produce significantly more transferable concepts than behavioral cloning ($p < 0.001$), with encoder quality dominating alignment similarity as a predictor of transfer success.
+    \item \textbf{Transitive concept alignment}: The first study of composed alignment in RL, revealing that intermediary quality modulates chain fidelity and that high-quality relays can improve over direct transfer.
+    \item \textbf{Six transfer settings with rigorous evaluation}: Agent-to-agent (5 seeds), alignment method comparison (5 methods), transitive chains (6 chains), cross-domain (3$\times$3 matrix), curriculum (5 seeds), and strategy composition.
+    \item \textbf{Causal concept validation}: Comprehensive experiments establishing that unsupervised concepts are causally meaningful (75.6\% action change), stable (ARI $> 0.87$), and differentiated.
+\end{enumerate}
+
+% ============================================================
+% 2. Related Work
+% ============================================================
+\section{Related Work}
+
+\paragraph{Concept Bottleneck Models.}
+Koh et al.~\citep{koh2020concept} introduced CBMs for supervised learning, where models predict human-defined concepts as an intermediate step. Extensions include stochastic~\citep{kim2023stochastic}, energy-based~\citep{xu2024energy}, and probabilistic~\citep{kim2023probabilistic} variants. Delfosse et al.~\citep{delfosse2024interpretable} extended CBMs to RL with SCoBots, using supervised object-centric concepts for Atari agents. All require domain-specific concept labels; \prism{} discovers concepts automatically and uses them for transfer.
+
+\paragraph{Transfer Learning in RL.}
+Transfer learning in RL aims to leverage knowledge from source tasks to accelerate learning on target tasks~\citep{taylor2009transfer}. Approaches include policy distillation~\citep{rusu2016policy}, where a student network is trained to mimic a teacher's behavior; progressive neural networks~\citep{rusu2016progressive}, which add lateral connections between task-specific columns; and successor features~\citep{barreto2017successor}, which separate task-specific reward weights from environment dynamics. These methods transfer at the level of neural network weights or features. \prism{} transfers at the level of \emph{discrete concepts}---a higher level of abstraction that is inherently more interpretable and composable.
+
+\paragraph{Multi-Task and Hierarchical RL.}
+The options framework~\citep{sutton1999between} decomposes policies into reusable sub-policies (options), enabling transfer of behavioral primitives. HIRO~\citep{nachum2018data} learns hierarchical policies with high-level goals. Universal Value Function Approximators~\citep{schaul2015universal} generalize across goals. These approaches share the spirit of reusable knowledge but operate on continuous representations. \prism{}'s discrete concepts provide a more structured, analyzable interface.
+
+\paragraph{Discrete Representations in RL.}
+Vector Quantized representations learn discrete state abstractions for RL. VQ-VLA~\citep{zhu2024vqvla} uses VQ for robotic manipulation; Hafner et al.~\citep{hafner2020dreamer} employ categorical latent variables in world models. SINDy-RL~\citep{zolman2025sindyrl} learns symbolic representations. Our work uses discrete concepts specifically as a transfer interface, not just for state compression.
+
+\paragraph{Meta-Learning.}
+Meta-learning approaches such as MAML~\citep{finn2017model} optimize for few-shot adaptation within a task distribution, requiring gradient updates at transfer time. \prism{} enables \emph{zero-shot} transfer via concept remapping without any gradient updates---the alignment is computed once from centroids and applied directly.
+
+\paragraph{Unsupervised Skill Discovery.}
+Methods like DIAYN~\citep{eysenbach2019diversity} discover diverse behavioral primitives (action sequences) without supervision. \prism{} discovers \emph{state abstractions} (concepts) rather than behavioral primitives. These are complementary: skills decompose \emph{what to do} into reusable subroutines, while concepts decompose \emph{what the agent perceives} into discrete categories that enable policy transfer.
+
+\paragraph{Causal Interpretability.}
+Causal approaches to neural networks~\citep{geiger2021causal} test whether internal representations causally affect behavior. Our intervention experiments provide causal evidence that concepts determine actions, a prerequisite for reliable transfer: concepts that merely correlate with behavior would not transfer meaningfully to new settings.
+
+% ============================================================
+% 3. Method
+% ============================================================
+\section{Method}
+
+\subsection{Overview}
+
+\prism{} operates in three stages, each producing a reusable artifact:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Stage 1 --- Baseline Training}: Train a standard RL agent (PPO or DQN) with a CNN/MLP encoder $\encoder$, producing a frozen encoder that maps observations to 128-dimensional feature vectors.
+    \item \textbf{Stage 2 --- Concept Discovery}: Collect features $\{z_i = \encoder(o_i)\}_{i=1}^N$ from gameplay episodes, then fit K-means with $K$ clusters to discover concept centroids $\{\mu_k\}_{k=1}^K$.
+    \item \textbf{Stage 3 --- Bottleneck Training}: Train a policy $\policy$ that receives \emph{only} a concept ID $c = \arg\min_k \|z - \mu_k\|_2$ as input, forcing all strategic reasoning through the discrete concept representation.
+\end{enumerate}
+
+\subsection{Encoder Architecture}
+
+For Go~7$\times$7, we use a 3-layer CNN encoder:
+\begin{align}
+    z &= \encoder(o) = \text{FC}_{128}(\text{ReLU}(\text{Flatten}(\text{Conv}_{64}(\text{Conv}_{32}(o))))) \label{eq:encoder}
+\end{align}
+where $o \in \mathbb{R}^{7 \times 7 \times 3}$ encodes black stones, white stones, and empty positions. For continuous control environments (CartPole, Acrobot, LunarLander), we use a 3-layer MLP encoder ($\text{obs\_dim} \to 128 \to 128 \to 128$). Critically, both architectures output $z \in \mathbb{R}^{128}$, ensuring concept centroids from any domain live in the same dimensionality.
+
+\subsection{Concept Discovery via K-Means}
+
+After freezing the encoder, we cluster features from gameplay episodes using MiniBatch K-means:
+\begin{equation}
+    c(o) = \arg\min_{k \in \{0, \ldots, K-1\}} \| \encoder(o) - \mu_k \|_2
+\end{equation}
+
+This discretization creates the information bottleneck: all downstream decisions are based solely on which cluster the current state falls into. We use $K=64$ for Go (6 bits) and $K=32$ for classic control (5 bits).
+
+\subsection{Bottleneck Policy}
+
+The bottleneck policy receives a single integer $c \in \{0, \ldots, K-1\}$ and outputs action probabilities:
+\begin{equation}
+    \policy(a \mid c) = \text{Softmax}(\text{MLP}(\text{Embed}(c)))
+\end{equation}
+where $\text{Embed}: \{0, \ldots, K-1\} \to \mathbb{R}^{64}$ is a learned embedding and the MLP has two hidden layers of 128 units. This architecture has $\sim$15K parameters, compared to $\sim$100K for the full baseline. We train using generational PPO: 100 generations of 20,000 timesteps each.
+
+\subsection{Concept Alignment via Hungarian Matching}
+\label{sec:alignment}
+
+The key contribution enabling strategy transfer is \emph{concept alignment}. Given two concept managers with centroids $\{\mu_k^A\}_{k=1}^{K_A}$ and $\{\mu_k^B\}_{k=1}^{K_B}$ from agents $A$ and $B$, we compute a cosine similarity matrix:
+\begin{equation}
+    S_{ij} = \frac{\mu_i^A \cdot \mu_j^B}{\|\mu_i^A\| \cdot \|\mu_j^B\|}
+\end{equation}
+
+For instance, in Go~7$\times$7 with $K=64$, concept~45 might correspond to states where black has a strong position in the top-right corner---learned implicitly because the encoder activates similarly for such states. Concept alignment then asks: which of agent $B$'s concepts captures the same strategic situation?
+
+For same-$K$ transfers, we find the optimal 1:1 mapping via the Hungarian algorithm~\citep{kuhn1955hungarian}, which solves the linear assignment problem on the cost matrix $C = -S$ in $O(K^3)$ time:
+\begin{equation}
+    \sigma^* = \arg\min_{\sigma \in \text{Perm}(K)} \sum_{k=1}^{K} -S_{k, \sigma(k)}
+\end{equation}
+
+For different-$K$ transfers, we use greedy nearest-neighbor alignment, where each source concept maps to its most similar target concept (many-to-one allowed).
+
+\subsection{Strategy Transfer Pipeline}
+\label{sec:transfer}
+
+Given a mapping $\sigma: \{1, \ldots, K_A\} \to \{1, \ldots, K_B\}$ from concept alignment, we transfer the bottleneck policy from agent $A$ to agent $B$'s concept space:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Embedding transfer}: For each target concept $j$, set the embedding vector to the average of source embeddings mapped to $j$:
+    \begin{equation}
+        e_j^B = \frac{1}{|\sigma^{-1}(j)|} \sum_{i \in \sigma^{-1}(j)} e_i^A
+    \end{equation}
+    Unmapped target concepts receive the mean of all source embeddings.
+
+    \item \textbf{Policy head transfer}: Copy the MLP weights directly if the action space matches. For different action spaces, copy the overlapping portion and randomly initialize new actions.
+
+    \item \textbf{Zero-shot evaluation}: Use $B$'s encoder and concepts with $A$'s remapped policy---no additional training.
+
+    \item \textbf{Warm-start fine-tuning}: Initialize $B$'s bottleneck with transferred weights, then fine-tune with a reduced learning rate.
+\end{enumerate}
+
+\subsection{Strategy Composition}
+\label{sec:composition}
+
+Given $N$ specialist strategies with concept-policy pairs $\{(\concept_n, \pi_n)\}_{n=1}^N$, we compose them into a generalist via aligned embedding averaging:
+
+\begin{equation}
+    e_j^{\text{composed}} = \sum_{n=1}^{N} w_n \cdot \tilde{e}_{j,n}
+\end{equation}
+
+where $\tilde{e}_{j,n}$ is specialist $n$'s embedding for concept $j$ (after alignment to the reference concept space) and $w_n$ are composition weights ($\sum_n w_n = 1$). We also explore phase-based routing, where different specialists handle different game phases (opening, midgame, endgame).
+
+\subsection{Theoretical Motivation: Information-Theoretic Transfer Bounds}
+\label{sec:theory}
+
+We provide an information-theoretic analysis of why concept alignment enables transfer, validated empirically across all agent pairs.
+
+\paragraph{Notation.}
+Let $C^A$ and $C^B$ be concept random variables for agents $A$ and $B$, each taking values in $\{1, \ldots, K\}$, induced by classifying a shared set of observations through each agent's encoder and concept manager. Let $Q(A \to B) \in [0, 1]$ denote the zero-shot win rate of agent $A$'s bottleneck policy transferred to agent $B$'s concept space after Hungarian alignment $\sigma^*$. Define the \emph{aligned} concept variable $\tilde{C}^B = \sigma^*(C^B)$.
+
+\paragraph{Transfer Bound.}
+Transfer quality is bounded by the mutual information between concept distributions:
+\begin{equation}
+    Q(A \to B) \leq I(C^A; \tilde{C}^B)
+    \label{eq:transfer_bound}
+\end{equation}
+
+The intuition: if knowing agent $B$'s concept tells us nothing about agent $A$'s concept ($I = 0$), then $A$'s policy---which maps $A$-concepts to actions---receives no useful signal from $B$'s concepts. Decomposing:
+\begin{equation}
+    I(C^A; \tilde{C}^B) = H(C^A) - H(C^A \mid \tilde{C}^B)
+\end{equation}
+
+The first term $H(C^A) \leq \log K$ (equality when concepts are uniform; verified empirically: all 64 concepts are active for Go agents). The second term captures residual uncertainty about the source concept given the aligned target concept---low when alignment is tight, high when many source concepts map ambiguously.
+
+\paragraph{Connection to Alignment Similarity.}
+The mean alignment similarity $\mu = \frac{1}{K} \sum_{k=1}^{K} S_{k, \sigma^*(k)}$ (cosine similarity of matched pairs) relates to the conditional entropy. When $\mu$ is high, matched centroids are geometrically close, so observations mapped to concept $k$ by agent $A$ will tend to map to concept $\sigma^*(k)$ by agent $B$---i.e., $H(C^A \mid \tilde{C}^B)$ is low. This yields two testable predictions:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Higher $K$ enables more transfer capacity}: More concepts provide higher bandwidth ($\log K$ bits). Our IB sweep confirms: val accuracy rises from 17.6\% ($K=4$) to 93.7\% ($K=256$).
+    \item \textbf{Higher MI predicts better transfer}: We compute empirical $I(C^A; C^B)$ for all agent pairs by classifying 5,000 shared observations through each encoder (Section~\ref{sec:prediction}). Unlike centroid-based alignment similarity $\mu$, MI captures the full joint distribution of concept co-occurrences.
+\end{enumerate}
+
+\paragraph{Empirical Validation.}
+We compute $I(C^A; C^B)$ for all 6 Go agent pairs by encoding 5,000 shared observations through each encoder and measuring concept co-occurrence. The results partially validate the bound: PPO$\leftrightarrow$DQN (the highest-transferring pair) has the highest MI at 2.09 bits, while DAgger pairs have lower MI (1.08--1.24 bits). MI correlates positively with transfer quality ($r = 0.31$), outperforming centroid-based alignment similarity ($R^2 = 0.004$), though significance is limited with 6 data points ($p = 0.55$).
+
+Critically, DAgger's concept entropy ($H = 3.77$ bits) is far lower than PPO's ($H = 5.87$) or DQN's ($H = 5.76$), despite having the same $K = 64$. This means DAgger concepts are concentrated on fewer states---consistent with BC learning specialized features from expert trajectories rather than broadly structured features from diverse exploration.
+
+\paragraph{What the Bound Misses.}
+MI is symmetric ($I(C^{\text{PPO}}; C^{\text{DQN}}) = I(C^{\text{DQN}}; C^{\text{PPO}}) = 2.09$ bits) but transfer is highly asymmetric (PPO$\to$DQN = 92\% vs.\ DQN$\to$PPO = 64\%). The missing factor is \emph{source policy generalization}: whether the source's concept-action mapping generalizes beyond the source concept distribution. RL-trained encoders explore diverse states, producing policies that handle unfamiliar concept assignments gracefully; BC-trained encoders do not. This asymmetry---invisible to MI---is the dominant predictor of transfer success ($p < 0.001$; Section~\ref{sec:agent_transfer}).
+
+% ============================================================
+% 4. Experimental Setup
+% ============================================================
+\section{Experimental Setup}
+
+\subsection{Environments}
+
+\paragraph{Go 7$\times$7.}
+We use PettingZoo~\citep{terry2021pettingzoo} Go wrapped as a single-agent Gymnasium environment. Observations are $\mathbb{R}^{7 \times 7 \times 3}$ (black/white/empty planes), with 50 discrete actions (49 positions + pass). Training uses self-play (past agent versions as opponents in 50\% of generations).
+
+\paragraph{Go 5$\times$5.}
+A smaller board variant (26 actions) used for curriculum transfer experiments. The CNN encoder adapts automatically (FC layer: $64 \times 5 \times 5 \to 128$).
+
+\paragraph{Classic Control.}
+CartPole-v1 (4D obs, 2 actions), LunarLander-v3 (8D obs, 4 actions), and Acrobot-v1 (6D obs, 3 actions). All use MLP encoders with $K=32$ concepts.
+
+\subsection{Agents}
+
+We train agents using three methods:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{PPO}~\citep{schulman2017proximal}: On-policy actor-critic via MaskablePPO (500K timesteps, convergence at $\sim$300--400K).
+    \item \textbf{DQN}~\citep{mnih2015human}: Off-policy Q-learning with action masking (500K timesteps, $\epsilon$-greedy decay from 1.0 to 0.05 over first 100K).
+    \item \textbf{DAgger}: Dataset Aggregation~\citep{ross2011reduction} using GnuGo Level~5 expert labels (335K training samples over 2 DAgger rounds).
+\end{itemize}
+
+This yields 3 Go encoders, 3 concept managers, and 3 bottleneck policies---all with the same architecture but different training, enabling agent-to-agent transfer without new training.
+
+\subsection{Experiments}
+
+We evaluate \prism{} across two categories:
+
+\paragraph{Strategy Transfer (Section~\ref{sec:transfer_results}).}
+Six transfer settings testing different aspects of concept-mediated knowledge reuse:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Agent-to-Agent} (Section~\ref{sec:agent_transfer}): Transfer between PPO, DQN, and DAgger on Go~7$\times$7, with extended alignment method comparison (5 methods, 5 seeds).
+    \item \textbf{Cross-Domain} (Section~\ref{sec:cross_domain}): Transfer from CartPole/LunarLander to Acrobot.
+    \item \textbf{Strategy Composition} (Section~\ref{sec:composition_results}): Preliminary composition of specialist Go agents.
+    \item \textbf{Curriculum} (Section~\ref{sec:curriculum_results}): Transfer from Go~5$\times$5 to 7$\times$7.
+    \item \textbf{Transitive Transfer} (Section~\ref{sec:transitive}): Testing composability of concept alignments across three-agent chains.
+    \item \textbf{Transfer Prediction} (Section~\ref{sec:prediction}): Regression analysis of alignment$\to$transfer quality relationship.
+\end{enumerate}
+
+\paragraph{Concept Validation (Section~\ref{sec:validation}).}
+Causal intervention, concept ablation, concept stability, and information bottleneck analysis---establishing that concepts are causally meaningful and stable enough to support reliable transfer.
+
+All transfer experiments use 5-seed evaluation with 100 games per seed unless otherwise noted, and report statistical significance via Welch's $t$-test.
+
+% ============================================================
+% 5. Results: Strategy Transfer (MAIN RESULTS)
+% ============================================================
+\section{Results: Strategy Transfer}
+\label{sec:transfer_results}
+
+We evaluate \prism{} across six transfer settings, each testing a different aspect of concept-mediated knowledge reuse: (1)~agent-to-agent transfer tests algorithm independence, (2)~cross-domain tests environment generality, (3)~composition tests combinatorial reuse, (4)~curriculum tests scale transfer, (5)~transitive transfer tests alignment composability, and (6)~transfer prediction analyzes success factors. We then validate the underlying concept properties that make transfer possible (Section~\ref{sec:validation}).
+
+\subsection{Agent-to-Agent Transfer}
+\label{sec:agent_transfer}
+
+We test all 6 source$\to$target pairs among PPO, DQN, and DAgger agents on Go~7$\times$7. Each pair uses the same architecture ($K=64$, 50 actions) but different encoder training, making this a test of whether concepts from different algorithms capture similar strategic structure.
+
+\paragraph{Protocol.}
+For each pair: (1) align source and target concepts via Hungarian matching, (2) transfer source policy to target concept space via embedding remapping, (3) evaluate zero-shot (no additional training).
+
+\begin{table}[t]
+\centering
+\caption{Agent-to-agent concept alignment and zero-shot transfer on Go~7$\times$7 (5 seeds, 100 games each). Win rate $\pm$ std; $^\dagger$ indicates not significantly above 50\% random baseline ($p > 0.05$).}
+\label{tab:agent_transfer}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Source} & \textbf{Target} & \textbf{Align Sim} & \textbf{Zero-Shot WR} & \textbf{$p$ vs.\ 50\%} \\
+\midrule
+PPO    & DQN    & 0.262 & \textbf{92.0\%} $\pm$ 2.6\% & $5.5 \times 10^{-6}$ \\
+PPO    & DAgger & 0.310 & 90.6\% $\pm$ 2.2\% & $3.5 \times 10^{-6}$ \\
+DQN    & PPO    & 0.262 & 64.4\% $\pm$ 6.1\% & 0.009 \\
+DQN    & DAgger & 0.240 & 64.4\% $\pm$ 4.0\% & 0.002 \\
+DAgger & PPO    & 0.310 & 55.2\% $\pm$ 8.2\%$^\dagger$ & 0.273 \\
+DAgger & DQN    & 0.240 & 53.6\% $\pm$ 3.0\%$^\dagger$ & 0.075 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Multi-seed evaluation reveals a clear \emph{source quality hierarchy} (Table~\ref{tab:agent_transfer}): PPO as source achieves 91--92\% ($p < 10^{-5}$), DQN as source 64\% ($p < 0.01$), and DAgger as source 54--55\% (not significant). This hierarchy---confirmed across 5 seeds with 100 games each---is among our most important findings: \textbf{RL-trained encoders produce significantly more transferable concept representations than behavioral cloning} (mean WR 76.3\% vs.\ 54.2\%, $p < 0.001$).
+
+The likely explanation is that RL training explores diverse states through trial and error, learning features that capture general strategic structure. Behavioral cloning, by contrast, only sees the expert's preferred trajectories, learning features that are specialized to one play style. When these features are discretized into concepts, RL concepts capture broader strategic categories while BC concepts capture expert-specific state clusters.
+
+Alignment similarities are moderate (0.24--0.31), and alignment similarity alone does \emph{not} predict transfer quality ($R^2 = 0.004$, $p = 0.77$). PPO$\to$DQN achieves 92\% with $\mu = 0.26$, while DAgger$\to$DQN achieves only 54\% with $\mu = 0.24$. This demonstrates that the quality of the source representations matters far more than the geometric alignment between concept spaces---a finding with practical implications for choosing transfer sources.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{transfer_same_task.png}
+    \caption{Agent-to-agent transfer results. Left: concept alignment similarity heatmap. Center: zero-shot win rates for all 6 transfer pairs (5 seeds, error bars $= \pm 1$ std). Right: mean alignment similarity ($\mu$, x-axis) vs.\ zero-shot win rate (y-axis). Alignment similarity does not predict transfer quality ($R^2 = 0.004$, $p = 0.77$); source encoder quality (marker color) is the dominant factor.}
+    \label{fig:agent_transfer}
+\end{figure}
+
+\paragraph{Transfer Baselines.}
+We compare \prism{} against three baselines on PPO$\to$DQN (Table~\ref{tab:baselines}):
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Policy distillation}~\citep{rusu2016policy}: Train the target agent's full network to minimize KL divergence with the source agent's action distribution over 10K states sampled from target gameplay. This represents neural transfer without concept mediation.
+    \item \textbf{Random mapping}: Transfer using a random permutation $\sigma_{\text{rand}}$ instead of Hungarian alignment, isolating the effect of alignment quality from the effect of concept-mediated transfer itself.
+    \item \textbf{No alignment (identity)}: Transfer source embeddings directly to target concepts by index ($\sigma(k) = k$), testing whether geometric alignment is necessary.
+\end{itemize}
+
+\begin{table}[t]
+\centering
+\caption{Transfer method comparison for PPO$\to$DQN on Go~7$\times$7.}
+\label{tab:baselines}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Method} & \textbf{Zero-Shot WR} & \textbf{Interpretable?} \\
+\midrule
+\prism{} (Hungarian, 5 seeds)  & \textbf{92.8\%} $\pm$ 2.9\% & Yes \\
+Policy Distillation             & 74\%               & No \\
+Random Mapping (5 seeds)        & 73.0\% $\pm$ 12.8\% & Yes \\
+No Alignment (5 seeds)          & 65.8\% $\pm$ 6.0\% & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\prism{} alignment (92.8\%) outperforms policy distillation (74\%), random mapping (73.0\%), and no alignment (65.8\%). The 27pp gap over no alignment ($p < 0.001$) confirms that concept alignment is essential for high-quality transfer. \prism{} outperforms policy distillation while maintaining full interpretability---every transfer decision can be traced through discrete concept assignments.
+
+\paragraph{Alignment Method Comparison.}
+To understand whether the specific alignment algorithm matters, we compare five methods on PPO$\to$DQN (5 seeds, 100 games each):
+
+\begin{table}[t]
+\centering
+\caption{Alignment method comparison for PPO$\to$DQN on Go~7$\times$7 (5 seeds, 100 games each). Pairwise Welch's $t$-test; $^*$significant at $p < 0.05$.}
+\label{tab:alignment_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Align Sim} & \textbf{Zero-Shot WR} & \textbf{$p$ vs.\ Hungarian} \\
+\midrule
+Hungarian (ours)       & 0.262 & \textbf{92.8\%} $\pm$ 2.9\% & --- \\
+Procrustes             & 0.260 & \textbf{92.8\%} $\pm$ 1.9\% & 1.000 \\
+Greedy NN              & 0.318 & 91.0\% $\pm$ 1.9\% & 0.337 \\
+Random permutation     & 0.230 & 73.0\% $\pm$ 12.8\%$^*$ & 0.035 \\
+Identity (no alignment)& 0.235 & 65.8\% $\pm$ 6.0\%$^*$ & $< 0.001$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The results (Table~\ref{tab:alignment_comparison}) reveal a striking finding: \textbf{the key factor is alignment itself, not the specific algorithm}. Hungarian, Procrustes, and Greedy NN form a statistical tie at 91--93\% WR ($p > 0.2$ for all pairwise comparisons), while Random and Identity mapping are significantly worse ($p < 0.05$). The 27 percentage-point gap between optimal alignment (93\%) and no alignment (66\%) demonstrates that concept alignment is essential---but any principled alignment method suffices. This is good news for practitioners: the framework is robust to the choice of alignment algorithm.
+
+\subsection{Cross-Domain Transfer}
+\label{sec:cross_domain}
+
+We test whether concepts learned in one domain can bootstrap learning in a different domain with a full 3$\times$3 transfer matrix: CartPole ($K=32$, 2 actions), LunarLander ($K=32$, 4 actions), and Acrobot ($K=32$, 3 actions). Each pair is evaluated with LR sweep $\{5 \times 10^{-5}, 10^{-4}, 3 \times 10^{-4}\}$, 100 generations, and 5 seeds.
+
+\begin{table}[t]
+\centering
+\caption{Cross-domain transfer matrix (5 seeds, 100 generations, tuned LR). Improvement percentage over from-scratch baseline. $^\dagger$No individual result reaches $p < 0.05$ due to high baseline variance.}
+\label{tab:cross_domain}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Source} & \textbf{Target} & \textbf{Align Sim} & \textbf{Transfer} & \textbf{Scratch} & \textbf{Improv.} \\
+\midrule
+CartPole    & LunarLander & 0.428 & $-263 \pm 29$ & $-333 \pm 86$ & $+21\%$ \\
+LunarLander & CartPole    & 0.428 & $464 \pm 72$ & $428 \pm 94$ & $+9\%$ \\
+Acrobot     & CartPole    & 0.407 & $445 \pm 110$ & $428 \pm 94$ & $+4\%$ \\
+Acrobot     & LunarLander & 0.413 & $-319 \pm 63$ & $-333 \pm 86$ & $+4\%$ \\
+CartPole    & Acrobot     & 0.407 & $\mathbf{-107 \pm 9}$ & $-106 \pm 17$ & $-1\%$ \\
+LunarLander & Acrobot     & 0.413 & $-114 \pm 8$ & $-106 \pm 17$ & $-8\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Statistical significance}: None of the 6 cross-domain transfers reach $p < 0.05$ with 5 seeds, reflecting inherent variance in concept bottleneck training (CartPole baseline std $= 94$, LunarLander baseline std $= 86$). Cross-domain transfer shows a suggestive but noisy trend warranting larger-scale investigation (Table~\ref{tab:cross_domain}): 4 of 6 off-diagonal pairs improve over from-scratch baselines, with CartPole$\to$LunarLander showing the largest gain ($+21\%$). The small policy network ($\sim$5K parameters) with only 32 discrete concepts produces variable learning curves, making significance hard to achieve at this sample size.
+
+Zero-shot transfer fails across all domain pairs ($-500$ for Acrobot targets, random-level for others), confirming that cross-domain concept-action mappings are not directly transferable. The benefit comes from \emph{initialization}: transferred concept embeddings provide structure that guides early exploration, functioning as a warm start analogous to pre-trained features in vision. The alignment similarities cluster at $0.41$--$0.43$ regardless of source domain, suggesting a ceiling on cross-domain structural correspondence in the 128D feature space. These results represent a suggestive trend warranting investigation at larger scale ($\geq$20 seeds) or with variance reduction techniques.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{transfer_cross_domain.png}
+    \caption{Cross-domain transfer results. Learning curves for selected pairs show transferred initialization trends toward faster early convergence, though high variance prevents significance at 5 seeds.}
+    \label{fig:cross_domain}
+\end{figure}
+
+\subsection{Strategy Composition (Preliminary)}
+\label{sec:composition_results}
+
+We conducted preliminary experiments to test whether the concept alignment mechanism enables combining specialist agents. We trained three Go specialists with different reward shaping: aggressive (capture bonuses), territorial (corner/edge bonuses), and balanced (standard reward), all sharing the same encoder.
+
+Specialist bottleneck agents trained with shaped rewards consistently performed below random (32--42\% win rate), indicating that the concept bottleneck's 64 discrete states are too constrained to support reward-shaped specialization---even with subtle shaping coefficients ($\leq 0.05$). This is the primary failure in our composition experiments.
+
+Despite poor specialist quality, the alignment mechanism itself worked perfectly: cross-specialist alignment was 0.97--1.00 cosine similarity, confirming that the shared encoder produces identical concept spaces regardless of reward shaping. Phase routing---selecting different specialists based on game phase---recovered 78\% win rate by delegating to the strong balanced agent during midgame. This demonstrates that composition is bottlenecked by specialist quality, not the alignment mechanism---a finding that informs future work on hierarchical bottlenecks or continuous relaxations that might support specialization (Section~\ref{sec:composition_limitation}).
+
+\subsection{Curriculum Transfer}
+\label{sec:curriculum_results}
+
+The strongest test of the concept-as-universal-interface hypothesis: transfer from Go~5$\times$5 to Go~7$\times$7. Encoder weights \emph{cannot} transfer (different FC layer sizes: $64 \times 25$ vs.\ $64 \times 49$), but concepts \emph{can} (both produce 128D features) and policies \emph{can} (concept$\to$action mapping via embedding remapping).
+
+\paragraph{Protocol.}
+(1) Train 5$\times$5 baseline and bottleneck, (2) align 5$\times$5 concepts to existing 7$\times$7 concepts, (3) transfer 5$\times$5 policy to 7$\times$7 (handle action space: 26$\to$50), (4) compare curriculum-initialized vs.\ from-scratch learning curves over 5 random seeds.
+
+\begin{table}[t]
+\centering
+\caption{Curriculum transfer: Go 5$\times$5 $\to$ 7$\times$7 (mean $\pm$ std over 5 seeds). Speedup is ratio of generations to reach threshold.}
+\label{tab:curriculum}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Condition} & \textbf{Align Sim} & \textbf{Final WR} & \textbf{Gen to 95\%} \\
+\midrule
+From scratch (control) & --- & 94.0\% $\pm$ 5.1\% & 35.0 $\pm$ 6.3 \\
+Curriculum transfer & 0.352 & 96.4\% $\pm$ 3.7\% & 26.0 $\pm$ 4.9 \\
+Zero-shot (no fine-tune) & 0.352 & 43\% & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The curriculum transfer (Table~\ref{tab:curriculum}) demonstrates that concepts learned on Go~5$\times$5 provide meaningful initialization for Go~7$\times$7, despite incompatible encoder weights (FC layer dimensions differ). The zero-shot win rate of 43\% is well above random play ($\sim$2\%), confirming that transferred 5$\times$5 concepts encode genuinely useful strategic knowledge for the larger board.
+
+The key result is \textbf{convergence speedup}: transferred agents reach the 95\% win-rate threshold in 26.0 generations vs.\ 35.0 for scratch---a \textbf{1.35$\times$ speedup} ($p = 0.027$, 5 seeds). At 98\%, the speedup is 1.36$\times$ ($p = 0.037$). Final win rates are equivalent (96.4\% vs.\ 94.0\%, $p = 0.46$). At generation 15, the transferred agent leads 92.4\% vs.\ 88.0\% ($p = 0.057$, borderline). This pattern---faster early convergence with equivalent final performance---is characteristic of effective initialization transfer.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{curriculum_multi_seed.png}
+    \caption{Curriculum transfer learning curves: Go~5$\times$5$\to$7$\times$7 transferred initialization (blue) converges faster to high win rates than from-scratch (orange), yielding a 1.35$\times$ speedup to 95\% ($p = 0.027$, 5 seeds). Shaded regions: $\pm$1 std.}
+    \label{fig:curriculum}
+\end{figure}
+
+\subsection{Transitive Transfer}
+\label{sec:transitive}
+
+We introduce the first study of \emph{transitive concept alignment} in RL: if concepts form a universal interface, alignment should compose transitively. Given agents $A$, $B$, $C$, the composed mapping $A \xrightarrow{\sigma_{AB}} B \xrightarrow{\sigma_{BC}} C$ should yield transfer comparable to the direct mapping $A \xrightarrow{\sigma_{AC}} C$.
+
+\paragraph{Protocol.}
+For each of the 6 three-agent chains among PPO, DQN, and DAgger: (1) compute direct alignment $A \to C$ via Hungarian matching, (2) compute chained alignment by composing $\sigma_{AB} \circ \sigma_{BC}$, (3) evaluate both zero-shot over 5 seeds (100 games each).
+
+\begin{table}[t]
+\centering
+\caption{Transitive transfer: direct vs.\ chained alignment (5 seeds, 100 games each). Positive gap means direct is better; negative means chained is better. $^*p < 0.05$, $^{**}p < 0.01$.}
+\label{tab:transitive}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Source$\to$Target} & \textbf{Via} & \textbf{Direct} & \textbf{Chained} & \textbf{Gap} & \textbf{$p$} \\
+\midrule
+PPO$\to$DAgger   & DQN    & 90.6\% & 92.2\% & $-1.6$ & 0.412 \\
+PPO$\to$DQN      & DAgger & 93.0\% & 64.2\% & $+28.8^{**}$ & 0.002 \\
+DQN$\to$DAgger   & PPO    & 65.6\% & 78.2\% & $-12.6^{*}$ & 0.030 \\
+DQN$\to$PPO      & DAgger & 69.6\% & 62.8\% & $+6.8^{**}$ & 0.004 \\
+DAgger$\to$DQN   & PPO    & 53.4\% & 64.0\% & $-10.6^{**}$ & 0.003 \\
+DAgger$\to$PPO   & DQN    & 55.0\% & 43.8\% & $+11.2^{*}$ & 0.013 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The transitive results (Table~\ref{tab:transitive}) reveal a nuanced and novel finding: \textbf{intermediary quality determines chain fidelity}. When the intermediate agent is PPO (rows 3 and 5), chained transfer \emph{improves} over direct by 11--13 percentage points ($p < 0.05$). When the intermediate is DAgger (rows 2, 4, 6), chained transfer degrades by 7--29pp. When the intermediate is DQN (row 1), chained and direct are statistically equivalent.
+
+This pattern has a clear explanation: PPO's concept space serves as a \emph{higher-quality relay} than DAgger's, because its RL-trained encoder produces more broadly structured concepts (consistent with the source quality hierarchy from Section~\ref{sec:agent_transfer}). Routing through a better intermediary can actually \emph{regularize} the alignment, analogous to how pivot translation through a resource-rich language sometimes outperforms direct translation between low-resource languages.
+
+The practical implication is that multi-hop transfer is viable---and even beneficial---when intermediaries are carefully selected based on encoder quality.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{transitive_transfer.png}
+    \caption{Transitive transfer: direct (blue) vs.\ chained (orange) alignment. Chains through PPO as intermediary (marked $\star$) consistently improve over direct transfer.}
+    \label{fig:transitive}
+\end{figure}
+
+\subsection{Strategy Library}
+
+We register all trained agents (Go PPO/DQN/DAgger, CartPole, LunarLander, Acrobot, specialists, Go~5$\times$5) into a strategy library and compute cross-strategy similarity. Figure~\ref{fig:similarity} shows the resulting similarity matrix. The tight same-domain clustering ($\mu > 0.96$ for Go agents) explains why same-domain transfer succeeds at high rates, while moderate cross-domain similarity ($0.26$--$0.48$) predicts that cross-domain transfer requires fine-tuning. The least similar pair (Acrobot vs.\ Go-DQN, $\mu = 0.26$) aligns with the weakest cross-domain transfer results.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{strategy_similarity.png}
+    \caption{Cross-strategy concept similarity matrix. Same-domain agents cluster tightly (Go PPO/DQN/DAgger: $\mu > 0.96$), while cross-domain pairs show moderate similarity ($0.26$--$0.48$), suggesting partial structural overlap in the 128D feature space despite different observation and action spaces.}
+    \label{fig:similarity}
+\end{figure}
+
+\subsection{When Transfer Succeeds: A Synthesis}
+\label{sec:synthesis}
+
+Across six transfer settings and over 100 evaluations, we identify a clear hierarchy of factors that predict transfer success:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Source encoder quality} (strongest predictor): Across all 24 same-domain Go transfer evaluations (6 pairs $\times$ multiple experiments), RL-trained sources average 76.3\% $\pm$ 12.1\% WR while BC-trained sources average 54.2\% $\pm$ 1.1\% (Welch's $t = 4.6$, $p < 0.001$). This dominates alignment similarity, which has no predictive power ($R^2 = 0.004$). The explanation: RL explores diverse states, learning broadly useful features; BC only sees expert trajectories, learning specialized features.
+
+    \item \textbf{Action space compatibility}: Zero-shot transfer succeeds when $\mu > 0.20$ AND the action space matches (91.7\% classification accuracy as success predictor). When action semantics differ, zero-shot fails (cross-domain: $-500$ to random-level), but fine-tuning recovers 4--21\% improvement over from-scratch baselines.
+
+    \item \textbf{Intermediary quality} (novel finding): In transitive transfer, routing through a high-quality intermediary (PPO) \emph{improves} transfer by 11--13pp over direct alignment ($p < 0.05$), while routing through a low-quality intermediary (DAgger) degrades it by 7--29pp. This suggests concept spaces have varying ``relay quality'' that can be exploited in multi-hop transfer.
+
+    \item \textbf{Alignment method robustness}: Any principled alignment method (Hungarian, Procrustes, greedy NN) achieves $\sim$92\% WR, while no alignment achieves 66\%. The 27pp gap confirms alignment is essential; the choice of algorithm is not.
+\end{enumerate}
+
+These findings suggest that concept-mediated transfer is most effective when: (a) source agents are trained with RL (not imitation), (b) action spaces are compatible for zero-shot or fine-tunable for warm-start, and (c) intermediaries are selected based on encoder quality when multi-hop transfer is needed.
+
+% ============================================================
+% 6. Concept Validation
+% ============================================================
+\section{Concept Validation}
+\label{sec:validation}
+
+Before transfer can be trusted, we must establish that concepts are causally meaningful (not mere correlates), stable (not artifacts of random initialization), and differentiated (not uniformly interchangeable). Our validation experiments confirm all three properties, providing the foundation for the transfer results in Section~\ref{sec:transfer_results}.
+
+\subsection{Bottleneck Agent Performance}
+
+\begin{table}[t]
+\centering
+\caption{Performance of concept bottleneck agents. Win rates over 50 games against a random opponent.}
+\label{tab:performance}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{PPO} & \textbf{DQN} & \textbf{VQ-VAE} \\
+\midrule
+Win Rate (Best)       & \textbf{100\%} & 96\%  & 92\% \\
+Win Rate (Final)      & \textbf{98\%}  & 74\%  & 92\% \\
+Active Concepts       & 64/64 & 64/64 & ---  \\
+Parameters            & $\sim$15K & $\sim$15K & $\sim$100K \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All bottleneck variants achieve strong performance (Table~\ref{tab:performance}) despite the severe information constraint of receiving only a single concept ID. The PPO bottleneck reaches 100\% best win rate with $\sim$15K parameters, compared to $\sim$100K for the full baseline. This demonstrates that 64 discrete concepts suffice to capture winning Go strategies.
+
+\subsection{Causal Intervention}
+\label{sec:intervention}
+
+We test whether concepts \emph{causally} determine behavior by overriding concept assignments and measuring action change (500 states, 5 alternative concepts each, 2,500 interventions).
+
+\begin{table}[t]
+\centering
+\caption{Causal intervention results. Under null hypothesis of no causal effect, expected change rate is 50\%.}
+\label{tab:intervention}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Go (PPO)} & \textbf{CartPole} \\
+\midrule
+Action Change Rate     & \textbf{75.6\%} & 44.1\% \\
+$p$-value vs.\ chance  & $1.4 \times 10^{-151}$ & --- \\
+Mean KL Divergence     & 1.780             & 0.676 \\
+Active Concepts        & 64/64           & 26/32 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 75.6\% action change rate (Table~\ref{tab:intervention}) is significantly above the 50\% expected under a null hypothesis where concepts merely correlate with actions rather than causally determining them ($p < 10^{-151}$, binomial test, 2,500 interventions). This provides strong causal evidence: concepts genuinely determine agent behavior. This is essential for transfer---if concepts were merely labels, remapping them would have no effect on downstream behavior.
+
+\subsection{Concept Stability}
+\label{sec:stability}
+
+We measure cross-seed stability by fitting K-means with 3 different random seeds and computing Adjusted Rand Index (ARI) between the resulting clusterings:
+
+\begin{table}[t]
+\centering
+\caption{Concept stability across random seeds and perturbations (DAgger encoder, K=64, 95K samples).}
+\label{tab:stability}
+\begin{tabular}{lc}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Cross-seed ARI (mean $\pm$ std)   & $0.887 \pm 0.026$ \\
+Cross-seed NMI (mean)             & $0.972$ \\
+Perturbation robustness ($\sigma=0.1$) & 100\% \\
+Temporal stability (consecutive ARI) & $0.913 \pm 0.007$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The high ARI ($>0.87$, Table~\ref{tab:stability}) means that concepts are not artifacts of random initialization---they reflect genuine structure in the feature space. This stability is a prerequisite for transfer: concepts must be reproducible for alignment to be meaningful.
+
+\subsection{Concept Ablation}
+\label{sec:ablation}
+
+Ablating individual concepts (replacing their actions with random moves) reveals two strategically critical concepts:
+
+\begin{table}[t]
+\centering
+\caption{Top concept ablation results (PPO, 500 games per concept, baseline WR = 95.8\%).}
+\label{tab:ablation}
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Concept} & \textbf{Frequency} & \textbf{Ablated WR} & \textbf{WR Drop} \\
+\midrule
+C45 & 6.8\% & 89.0\% & \textbf{6.8\%} \\
+C17 & 4.8\% & 90.6\% & \textbf{5.2\%} \\
+C50 & 15.8\% & 93.6\% & 2.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The existence of strategically critical concepts (Table~\ref{tab:ablation}) demonstrates that the concept space is not uniformly distributed---some situations genuinely require specific strategic responses. These critical concepts are the most important to transfer correctly.
+
+\subsection{Information Bottleneck}
+
+An extended sweep over $K \in \{4, 8, 16, 32, 64, 128, 256\}$ with 3 seeds each characterizes the information-performance tradeoff:
+
+\begin{table}[t]
+\centering
+\caption{Information bottleneck sweep (DAgger encoder, BC bottleneck, 3 seeds). Val accuracy = concept$\to$action prediction accuracy.}
+\label{tab:ib_sweep}
+\begin{tabular}{cccc}
+\toprule
+$K$ & Val Accuracy & Silhouette & Active/Total \\
+\midrule
+4   & 17.6\% $\pm$ 0.6\% & 0.176 & 4/4 \\
+8   & 21.8\% $\pm$ 0.8\% & 0.193 & 8/8 \\
+16  & 32.6\% $\pm$ 1.7\% & 0.282 & 16/16 \\
+32  & 48.5\% $\pm$ 0.0\% & 0.482 & 32/32 \\
+64  & 69.2\% $\pm$ 1.2\% & 0.690 & 64/64 \\
+128 & 91.0\% $\pm$ 0.2\% & 0.964 & 128/128 \\
+256 & 93.7\% $\pm$ 0.2\% & 0.952 & $\sim$139/256 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:ib_sweep} reveals a smooth accuracy-complexity tradeoff. The silhouette score increases sharply at $K \geq 32$, indicating well-separated clusters. For transfer, the choice of $K$ determines the granularity of the strategy interface: higher $K$ enables more precise transfer but requires more alignment pairs.
+
+% ============================================================
+% 7. Discussion
+% ============================================================
+\section{Discussion}
+
+\paragraph{Source Quality Trumps Alignment Similarity.}
+Perhaps our most surprising finding: alignment similarity ($\mu$) does \emph{not} predict transfer quality ($R^2 = 0.004$, $p = 0.77$ across 24 same-domain Go transfers). Instead, the dominant predictor is source encoder quality: RL-trained sources average 76.3\% WR while BC sources average 54.2\% ($p < 0.001$). This overturns the intuitive expectation that geometrically similar concept spaces should transfer better. We hypothesize that RL exploration produces features capturing \emph{state-action necessity}---which actions are available and valuable in a given state---while BC features capture \emph{state-action preferences}---which actions the expert prefers. When discretized, necessity-based features yield transferable state categories applicable to any policy; preference-based features yield expert-specific clusters that do not generalize.
+
+\paragraph{Transitive Transfer: Intermediary Quality Matters.}
+Our transitive transfer experiments---the first study of composed concept alignment in RL---reveal that routing through a high-quality intermediary (PPO) can \emph{improve} transfer over direct alignment by 11--13pp ($p < 0.05$). This unexpected result suggests that PPO's concept space acts as a regularizer: the two-hop alignment PPO$\to$DQN$\to$DAgger filters out noise in the direct DQN$\to$DAgger alignment, producing a cleaner mapping. Conversely, DAgger as intermediary degrades transfer by 7--29pp, consistent with its lower-quality concept space introducing noise. This finding has direct practical applications: in a strategy library with multiple agents, the optimal transfer path may involve an intermediate relay rather than direct alignment.
+
+\paragraph{Alignment Method Robustness.}
+The alignment comparison reveals that the framework's value lies in the \emph{concept bottleneck architecture}, not the specific alignment algorithm. Hungarian, Procrustes, and greedy nearest-neighbor all achieve $\sim$92\% WR (pairwise $p > 0.2$), while no alignment yields only 66\%. The 27pp gap between any principled alignment and no alignment ($p < 0.001$) establishes alignment as necessary. The insensitivity to algorithm choice is reassuring for practitioners: the method works without careful tuning.
+
+\paragraph{Transfer Quality Prediction.}
+\label{sec:prediction}
+We evaluate three predictors of transfer quality across all Go experiments: (1)~centroid-based alignment similarity $\mu$, (2)~empirical mutual information $I(C^A; C^B)$ computed from 5,000 shared observations, and (3)~source encoder type (RL vs.\ BC). Alignment similarity is the weakest predictor ($R^2 = 0.004$, $p = 0.77$). MI improves over alignment similarity ($r = 0.31$) but remains non-significant ($p = 0.55$) with only 6 data points. Source encoder type is by far the strongest: a simple binary classifier (RL source $\to$ success, BC source $\to$ failure) achieves 91.7\% accuracy across all 24 Go transfer evaluations.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{transfer_prediction.png}
+    \caption{Transfer quality analysis. (a)~Same-domain Go transfers: RL-trained sources (blue) consistently outperform BC sources (orange), regardless of alignment similarity. (b)~Cross-domain transfers: 4 of 6 pairs show positive improvement, though high variance prevents significance.}
+    \label{fig:prediction}
+\end{figure}
+
+As a practical heuristic, $\mu \geq 0.20$ correctly predicts whether transfer will exceed the 50\% random baseline with 91.7\% accuracy. For cross-domain transfer, alignment similarity shows a moderate correlation with improvement percentage ($R^2 = 0.51$, $p = 0.11$), suggesting that cross-domain concept correspondence may be predictive at larger scale.
+
+\paragraph{The Cost of Interpretability.}
+The concept bottleneck imposes a genuine information constraint. While sufficient for strong performance against random opponents (96--100\% win rate), bottleneck agents achieve 0\% vs.\ GnuGo Level~1. This 47--53pp gap represents the cost of forcing reasoning through $K=64$ discrete concepts. However, this cost buys transferability: the discrete concept layer enables alignment and transfer that would be impossible with continuous features.
+
+\paragraph{When to Use \prism{}.}
+Our results suggest \prism{} is most effective in three scenarios: (1)~building strategy libraries across multiple training runs of the same environment, where concept alignment provides 54--92\% zero-shot transfer; (2)~curriculum transfer from simpler to harder task variants, where concept initialization provides 1.35$\times$ convergence speedup; and (3)~bootstrapping learning in domains with moderate concept similarity ($0.35$--$0.45$), where fine-tuning can recover 4--21\% improvement. Cross-domain zero-shot transfer remains impractical; fine-tuning is required.
+
+\paragraph{Implications for Strategy Development.}
+\prism{} demonstrates a paradigm where RL knowledge accumulates across training runs. Our strategy library registers 10 agents across 6 domains with automatic nearest-neighbor retrieval. The source quality hierarchy (RL $\gg$ BC) provides actionable guidance: when building a strategy library, prioritize RL-trained agents as transfer sources. The transitive transfer results suggest that maintaining a small set of high-quality ``hub'' agents can improve transfer even to agents not directly connected in the alignment graph.
+
+% ============================================================
+% 8. Limitations and Future Work
+% ============================================================
+\section{Limitations and Future Work}
+
+We organize limitations by empirical evidence from our experiments, providing specific failure thresholds where possible.
+
+\subsection{DAgger Source Transfers Not Significant}
+The two DAgger-source transfer pairs (55.2\% and 53.6\%) do not reach statistical significance vs.\ the 50\% random baseline ($p = 0.27$ and $p = 0.075$, 5 seeds). This means our framework demonstrably works for RL-trained encoders (4/6 pairs, $p < 0.01$) but not for imitation-learned encoders. The source quality hierarchy (RL $\gg$ BC) is itself a useful finding, but it limits the framework's applicability to BC-trained agents.
+\emph{Future work}: Investigate hybrid encoders that combine RL exploration with BC expert guidance, potentially producing features that are both broadly structured and expert-informed.
+
+\subsection{Cross-Domain Transfer Not Significant}
+Despite positive trends (4/6 pairs improve by 4--21\%), no cross-domain transfer reaches $p < 0.05$ with 5 seeds. The from-scratch baselines have high variance (CartPole std = 94, LunarLander std = 86), making significance hard to achieve. The current evidence for cross-domain benefit remains suggestive rather than conclusive.
+\emph{Future work}: Evaluate with 20+ seeds or develop variance reduction techniques for bottleneck training (e.g., shared experience buffers, ensemble bottlenecks).
+
+\subsection{Interpretability--Performance Tradeoff}
+The concept bottleneck achieves 96--100\% win rate vs.\ random opponents but 0\% vs.\ GnuGo Level 1. This 47--53pp gap represents the cost of $K=64$ discrete concepts. Increasing $K$ helps (val accuracy: 69.2\% at $K=64$ vs.\ 91.0\% at $K=128$) but does not eliminate the gap.
+\emph{Future work}: Investigate adaptive $K$ during transfer, or continuous relaxations of the bottleneck (e.g., soft concept assignments with temperature annealing).
+
+\subsection{Strategy Composition}
+\label{sec:composition_limitation}
+Specialists trained with reward shaping perform below random (32--42\%), indicating the bottleneck is too constrained for shaped-reward specialization. Phase routing (78\%) demonstrates the mechanism works but underperforms the balanced baseline (98\%).
+\emph{Future work}: Use hierarchical bottlenecks or stronger reward shaping with curriculum training to develop viable specialists.
+
+\subsection{Future Directions}
+Beyond addressing individual limitations, our findings suggest broader extensions: (1)~investigating why RL encoders produce more transferable concepts than BC, perhaps through feature diversity metrics or representational similarity analysis, (2)~scaling transitive transfer to longer chains and more agents to characterize degradation rates, (3)~evaluating on higher-dimensional domains (Atari, MuJoCo) where concepts may capture richer abstractions, (4)~E(2)-equivariant encoders~\citep{cohen2016group} for board symmetries, and (5)~differentiable alignment (end-to-end learned mappings rather than post-hoc Hungarian matching).
+
+% ============================================================
+% 9. Conclusion
+% ============================================================
+\section{Conclusion}
+
+We presented \prism{}, a framework for concept-mediated strategy transfer that reveals fundamental properties of discrete concept representations in RL. Our main contributions and findings:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Source quality hierarchy}: RL-trained encoders produce significantly more transferable concepts than behavioral cloning (76\% vs.\ 54\% mean WR, $p < 0.001$), establishing encoder training method as the dominant factor in transfer success---more predictive than alignment similarity.
+
+    \item \textbf{Transitive concept alignment}: The first study of composed alignment in RL reveals that intermediary quality modulates chain fidelity, with high-quality intermediaries \emph{improving} over direct transfer by 11--13pp. This opens a new research direction in multi-hop knowledge transfer.
+
+    \item \textbf{Alignment method robustness}: Five alignment methods tested; all principled methods achieve $\sim$92\% WR ($p > 0.2$ between them), while no alignment yields 66\%. The framework is robust to algorithm choice.
+
+    \item \textbf{Curriculum transfer}: 1.35$\times$ convergence speedup from Go~5$\times$5 to 7$\times$7 ($p = 0.027$, 5 seeds), demonstrating concept transfer across incompatible encoder architectures.
+
+    \item \textbf{Causal validation}: Concepts are causally meaningful (75.6\% intervention change, $p < 10^{-151}$) and stable (ARI $> 0.87$), establishing them as reliable transfer primitives.
+\end{enumerate}
+
+The central insight is that discrete concepts, discovered without supervision, can serve as a \emph{common language} for strategy---but the quality of that language depends critically on how the underlying encoder was trained. Just as the quality of a translation depends on the translator's fluency, concept-mediated transfer depends on the encoder's breadth of experience.
+
+For practitioners: when building RL systems that will be retrained multiple times (e.g., game AI across patches, robot policies across simulation variants), incorporating a concept bottleneck enables knowledge accumulation across training runs rather than starting from scratch each time. Prioritize RL-trained agents as transfer sources and hub intermediaries, and use alignment statistics ($\mu \geq 0.20$) to screen transfer candidates before committing compute.
+
+% ============================================================
+% References
+% ============================================================
+\bibliographystyle{plainnat}
+\begin{thebibliography}{22}
+
+\bibitem[Barreto et~al.(2017)]{barreto2017successor}
+A.~Barreto, W.~Dabney, R.~Munos, J.~J. Hunt, T.~Schaul, H.~P. van~Hasselt, and D.~Silver.
+\newblock Successor features for transfer in reinforcement learning.
+\newblock In \emph{NeurIPS}, 2017.
+
+
+\bibitem[Cohen and Welling(2016)]{cohen2016group}
+T.~Cohen and M.~Welling.
+\newblock Group equivariant convolutional networks.
+\newblock In \emph{ICML}, 2016.
+
+\bibitem[Delfosse et~al.(2024)]{delfosse2024interpretable}
+Q.~Delfosse, S.~Sztwiertnia, M.~Gregori, and K.~Kersting.
+\newblock Interpretable concept bottlenecks to align reinforcement learning agents.
+\newblock In \emph{NeurIPS}, 2024.
+
+\bibitem[Eysenbach et~al.(2019)]{eysenbach2019diversity}
+B.~Eysenbach, A.~Gupta, J.~Ibarz, and S.~Levine.
+\newblock Diversity is all you need: Learning skills without a reward function.
+\newblock In \emph{ICLR}, 2019.
+
+\bibitem[Finn et~al.(2017)]{finn2017model}
+C.~Finn, P.~Abbeel, and S.~Levine.
+\newblock Model-agnostic meta-learning for fast adaptation of deep networks.
+\newblock In \emph{ICML}, 2017.
+
+\bibitem[Geiger et~al.(2021)]{geiger2021causal}
+A.~Geiger, H.~Lu, T.~Icard, and C.~Potts.
+\newblock Causal abstractions of neural networks.
+\newblock In \emph{NeurIPS}, 2021.
+
+\bibitem[Hafner et~al.(2020)]{hafner2020dreamer}
+D.~Hafner, T.~Lillicrap, M.~Norouzi, and J.~Ba.
+\newblock Mastering Atari with discrete world models.
+\newblock In \emph{ICLR}, 2020.
+
+\bibitem[Kim et~al.(2023{\natexlab{a}})]{kim2023probabilistic}
+E.~Kim, D.~Jung, S.~Park, S.~Kim, and S.~Yoon.
+\newblock Probabilistic concept bottleneck models.
+\newblock In \emph{ICML}, 2023.
+
+\bibitem[Kim et~al.(2023{\natexlab{b}})]{kim2023stochastic}
+S.~Kim, M.~Jung, and S.~Yun.
+\newblock Stochastic concept bottleneck models.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem[Koh et~al.(2020)]{koh2020concept}
+P.~W. Koh, T.~Nguyen, Y.~S. Tang, S.~Mussmann, E.~Pierson, B.~Kim, and P.~Liang.
+\newblock Concept bottleneck models.
+\newblock In \emph{ICML}, 2020.
+
+\bibitem[Kuhn(1955)]{kuhn1955hungarian}
+H.~W. Kuhn.
+\newblock The Hungarian method for the assignment problem.
+\newblock \emph{Naval Research Logistics Quarterly}, 2(1-2):83--97, 1955.
+
+\bibitem[Mnih et~al.(2015)]{mnih2015human}
+V.~Mnih, K.~Kavukcuoglu, D.~Silver, et~al.
+\newblock Human-level control through deep reinforcement learning.
+\newblock \emph{Nature}, 518(7540):529--533, 2015.
+
+\bibitem[Nachum et~al.(2018)]{nachum2018data}
+O.~Nachum, S.~S. Gu, H.~Lee, and S.~Levine.
+\newblock Data-efficient hierarchical reinforcement learning.
+\newblock In \emph{NeurIPS}, 2018.
+
+
+\bibitem[Ross et~al.(2011)]{ross2011reduction}
+S.~Ross, G.~J. Gordon, and D.~Bagnell.
+\newblock A reduction of imitation learning and structured prediction to no-regret online learning.
+\newblock In \emph{AISTATS}, 2011.
+
+\bibitem[Rusu et~al.(2016{\natexlab{a}})]{rusu2016policy}
+A.~A. Rusu, S.~G. Colmenarejo, C.~Gulcehre, et~al.
+\newblock Policy distillation.
+\newblock In \emph{ICLR}, 2016.
+
+\bibitem[Rusu et~al.(2016{\natexlab{b}})]{rusu2016progressive}
+A.~A. Rusu, N.~C. Rabinowitz, G.~Desjardins, et~al.
+\newblock Progressive neural networks.
+\newblock \emph{arXiv preprint arXiv:1606.04671}, 2016.
+
+\bibitem[Schaul et~al.(2015)]{schaul2015universal}
+T.~Schaul, D.~Horgan, K.~Gregor, and D.~Silver.
+\newblock Universal value function approximators.
+\newblock In \emph{ICML}, 2015.
+
+\bibitem[Schulman et~al.(2017)]{schulman2017proximal}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov.
+\newblock Proximal policy optimization algorithms.
+\newblock \emph{arXiv preprint arXiv:1707.06347}, 2017.
+
+
+\bibitem[Sutton et~al.(1999)]{sutton1999between}
+R.~S. Sutton, D.~Precup, and S.~Singh.
+\newblock Between MDPs and semi-MDPs: A framework for temporal abstraction in reinforcement learning.
+\newblock \emph{Artificial Intelligence}, 112(1-2):181--211, 1999.
+
+\bibitem[Taylor and Stone(2009)]{taylor2009transfer}
+M.~E. Taylor and P.~Stone.
+\newblock Transfer learning for reinforcement learning domains: A survey.
+\newblock \emph{JMLR}, 10:1633--1685, 2009.
+
+\bibitem[Terry et~al.(2021)]{terry2021pettingzoo}
+J.~Terry, B.~Black, N.~Grammel, et~al.
+\newblock PettingZoo: Gym for multi-agent reinforcement learning.
+\newblock In \emph{NeurIPS}, 2021.
+
+
+\bibitem[Xu et~al.(2024)]{xu2024energy}
+Y.~Xu, N.~Kamath, C.~Hoag, and Z.~Wang.
+\newblock Energy-based concept bottleneck models.
+\newblock In \emph{ICLR}, 2024.
+
+\bibitem[Zhu et~al.(2024)]{zhu2024vqvla}
+S.~Zhu, Y.~Zhao, L.~Chen, et~al.
+\newblock VQ-VLA: Vector quantized vision-language-action model.
+\newblock In \emph{ICCV}, 2024.
+
+\bibitem[Zolman et~al.(2025)]{zolman2025sindyrl}
+N.~Zolman, U.~Fasel, J.~N. Kutz, and S.~L. Brunton.
+\newblock SINDy-RL: Interpretable and efficient model-based reinforcement learning.
+\newblock \emph{Nature Communications}, 2025.
+
+\end{thebibliography}
+
+% ============================================================
+% Appendix: Reproducibility
+% ============================================================
+\appendix
+\section{Reproducibility}
+\label{sec:reproducibility}
+
+\subsection{Code and Data}
+
+All code, trained models, and experiment scripts are available at:
+\begin{center}
+\url{https://github.com/tompravetz/prism}
+\end{center}
+
+\paragraph{Installation.}
+\begin{verbatim}
+git clone https://github.com/tompravetz/prism.git
+cd prism
+python -m venv venv && venv\Scripts\activate
+pip install -r requirements.txt
+\end{verbatim}
+
+\paragraph{Quick Start.}
+\begin{verbatim}
+# Train baseline encoder
+python train_baseline.py --env go --algo ppo
+
+# Discover concepts and train bottleneck
+python train_bottleneck.py --algo ppo --n-concepts 64
+
+# Run transfer experiments
+python experiments/transfer_same_task.py
+python experiments/curriculum.py
+python experiments/transfer_cross_domain.py
+\end{verbatim}
+
+\subsection{Hardware and Runtime}
+
+All experiments were run on a consumer desktop:
+\begin{itemize}[leftmargin=*]
+    \item CPU: Intel Core (consumer-grade), no GPU required
+    \item RAM: 16 GB
+    \item OS: Windows 10/11
+    \item Python: 3.12, PyTorch 2.x, Stable-Baselines3
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Approximate runtime per experiment (single seed, consumer CPU).}
+\label{tab:runtime}
+\begin{tabular}{lc}
+\toprule
+\textbf{Experiment} & \textbf{Runtime} \\
+\midrule
+Baseline training (PPO, Go 7x7, 500K steps) & $\sim$2 hours \\
+Concept discovery (K-means, 500 episodes) & $\sim$5 minutes \\
+Bottleneck training (100 gen $\times$ 20K steps) & $\sim$2 hours \\
+Agent-to-agent transfer (6 pairs, 5 seeds) & $\sim$2.5 hours \\
+Alignment comparison (5 methods, 5 seeds) & $\sim$1 hour \\
+Transitive transfer (6 chains, 5 seeds) & $\sim$1 hour \\
+Curriculum transfer (5 seeds, 50 gen) & $\sim$10 hours \\
+Cross-domain transfer (3$\times$3 matrix, 5 seeds) & $\sim$15 hours \\
+Strategy composition (specialist training) & $\sim$4 hours \\
+Transfer prediction (analysis only) & $< 1$ minute \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Hyperparameters}
+
+\begin{table}[h]
+\centering
+\caption{Key hyperparameters across all experiments.}
+\label{tab:hyperparams}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Parameter} & \textbf{Go 7$\times$7} & \textbf{Classic Control} \\
+\midrule
+Encoder output dim & 128 & 128 \\
+Concept count $K$ & 64 & 32 \\
+Embedding dim & 64 & 32 \\
+Hidden dim & 128 & 64 \\
+Bottleneck generations & 100 & 50 \\
+Steps per generation & 20,000 & 4,096 \\
+Learning rate (training) & 3e-4 & 3e-4 \\
+Learning rate (fine-tuning) & 1e-4 & 1e-4 \\
+PPO clip range & 0.2 & 0.2 \\
+Discount $\gamma$ & 0.99 & 0.99 \\
+GAE $\lambda$ & 0.95 & 0.95 \\
+Entropy coefficient & 0.01 & 0.01 \\
+Value loss coefficient & 0.5 & 0.5 \\
+Gradient clip norm & 0.5 & 0.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Checkpoint Availability}
+
+Pre-trained models (encoders, concept managers, bottleneck policies) for all agents are included in the repository under \texttt{models/}. This allows reproducing transfer experiments without retraining baseline agents.
+
+\subsection{Common Issues and Solutions}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Bottleneck training fails to converge} (WR $< 60\%$ after 50 generations): Reduce $K$ (try 32 instead of 64), increase generation size (30K timesteps), or verify encoder quality (baseline should achieve $> 90\%$ WR before concept discovery).
+    \item \textbf{Concept alignment similarity near zero}: Ensure both encoders produce features in the same scale. Check that encoder outputs are normalized or that K-means centroids have comparable norms. Verify that gameplay data covers diverse game states.
+    \item \textbf{Transfer win rate below random} ($< 50\%$): Check that the alignment mapping is applied correctly (source$\to$target, not reversed). Verify that unmapped target concepts receive the mean embedding, not zeros.
+    \item \textbf{Cross-domain transfer produces NaN rewards}: Ensure action space handling is correct when source and target have different numbers of actions. The overlapping portion of the policy head should be copied, with new actions randomly initialized.
+\end{itemize}
+
+\end{document}

@@ -41,8 +41,6 @@ from src.networks import GoCNNEncoder, QNetwork
 from src.concept_manager import ConceptManager
 from src.concept_policy import (ConceptBottleneckPolicy, ConceptDQNPolicy,
                                  ConceptBottleneckAgent)
-from src.strategy_memory import StrategyMemory
-from src.opponent_pool import OpponentPool
 from src.utils import set_seed, get_device, ensure_dir
 
 
@@ -125,7 +123,7 @@ class PPOBottleneckTrainer:
             self.encoder, obs, self.device
         )
 
-    def collect_rollout(self, env, n_steps=1024, strategy_memory=None):
+    def collect_rollout(self, env, n_steps=1024):
         """
         Collect a rollout (trajectory) of experience.
 
@@ -133,12 +131,10 @@ class PPOBottleneckTrainer:
             1. Get current observation and convert to concept
             2. Sample action from policy given concept
             3. Step environment and record transition
-            4. Track concept→action mappings in strategy memory
 
         Args:
             env: Go environment.
             n_steps: Number of steps to collect.
-            strategy_memory: Optional StrategyMemory for tracking.
 
         Returns:
             Dictionary containing all trajectory data needed for PPO update.
@@ -200,16 +196,9 @@ class PPOBottleneckTrainer:
             rewards.append(reward)
             dones.append(float(done))
 
-            # Step 4: Track in strategy memory
-            if strategy_memory is not None:
-                strategy_memory.record_step(concept_id, action)
-
             episode_reward += reward
 
             if done:
-                # Episode ended — record final reward in strategy memory
-                if strategy_memory is not None:
-                    strategy_memory.end_episode(episode_reward)
                 episode_rewards.append(episode_reward)
                 episode_reward = 0.0
                 obs, info = env.reset()
@@ -615,8 +604,7 @@ def evaluate_agent(agent_fn, env, n_episodes=100):
 
 def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                      n_concepts=64, seed=42, save_dir="models/bottleneck",
-                     baseline_dir="models/baseline", self_play=False,
-                     self_play_start=10, self_play_ratio=0.5):
+                     baseline_dir="models/baseline"):
     """
     Main generational training loop for concept bottleneck agents.
 
@@ -624,8 +612,7 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
         1. Collect experience (rollout for PPO, episodes for DQN)
         2. Update the bottleneck policy
         3. Evaluate against random opponent
-        4. Optionally save checkpoint to opponent pool
-        5. Log metrics
+        4. Log metrics
 
     Args:
         algo: "ppo" or "dqn"
@@ -635,21 +622,11 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
         seed: Random seed.
         save_dir: Where to save bottleneck models.
         baseline_dir: Where to load baseline encoders from.
-        self_play: If True, train against past versions of the agent (not just
-                   random). This produces more meaningful win rates and can
-                   discover richer strategies.
-        self_play_start: Generation to start self-play (earlier gens use random
-                         to bootstrap a basic policy first).
-        self_play_ratio: Fraction of generations that use a self-play opponent
-                         (rest use random). 0.5 = 50% self-play, 50% random.
     """
     ensure_dir(save_dir)
     set_seed(seed)
     device = get_device()
     print(f"Device: {device}")
-    if self_play:
-        print(f"Self-play enabled: starts at gen {self_play_start}, "
-              f"ratio {self_play_ratio:.0%}")
 
     # ---- Load frozen encoder from baseline training ----
     env = GoEnv(board_size=7)
@@ -698,12 +675,6 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
     else:
         raise ValueError(f"Unknown algorithm: {algo}")
 
-    # ---- Strategy memory and opponent pool ----
-    strategy_memory = StrategyMemory(n_concepts=n_concepts, n_actions=n_actions)
-    opponent_pool = OpponentPool(
-        save_dir=os.path.join(save_dir, f"opponents_{algo}"),
-        max_pool_size=50,
-    )
     eval_env = GoEnv(board_size=7)
 
     # ---- Generational training loop ----
@@ -714,61 +685,9 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
     for gen in range(n_generations):
         gen_start = time.time()
 
-        # ---- Self-play: swap opponent for this generation ----
-        # After self_play_start generations, randomly choose between random
-        # opponent and a past version of the agent from the opponent pool.
-        use_self_play_this_gen = (
-            self_play
-            and gen >= self_play_start
-            and opponent_pool.size > 0
-            and np.random.random() < self_play_ratio
-        )
-
-        if use_self_play_this_gen:
-            # Create an opponent from a past bottleneck checkpoint
-            opp_state = opponent_pool.load_opponent_state_dict()
-            if opp_state is not None:
-                # Build a fresh policy copy for the opponent
-                if algo == "ppo":
-                    opp_policy = ConceptBottleneckPolicy(
-                        n_concepts=n_concepts, embed_dim=64,
-                        hidden_dim=128, n_actions=n_actions
-                    ).to(device)
-                else:
-                    opp_policy = ConceptDQNPolicy(
-                        n_concepts=n_concepts, embed_dim=64,
-                        hidden_dim=128, n_actions=n_actions
-                    ).to(device)
-                opp_policy.load_state_dict(opp_state)
-                opp_policy.eval()
-
-                # The opponent plays as white. It sees the board from white's
-                # perspective (which GoEnv handles internally — the opponent_fn
-                # receives the white player's observation and mask).
-                opp_encoder = trainer.encoder
-                opp_cm = trainer.concept_manager
-
-                def _self_play_opponent(obs, action_mask):
-                    """Self-play opponent: uses a past bottleneck checkpoint."""
-                    c = opp_cm.assign_concept_from_obs(opp_encoder, obs, device)
-                    cid = torch.LongTensor([c]).to(device)
-                    mask_t = torch.FloatTensor(action_mask).unsqueeze(0).to(device)
-                    with torch.no_grad():
-                        logits, _ = opp_policy(cid, mask_t)
-                    return int(logits[0].argmax().item())
-
-                env.opponent_fn = _self_play_opponent
-            else:
-                env.opponent_fn = env._random_opponent
-        else:
-            # Use random opponent
-            env.opponent_fn = env._random_opponent
-
         if algo == "ppo":
             # PPO: collect a rollout, then update
-            rollout = trainer.collect_rollout(
-                env, n_steps=steps_per_gen, strategy_memory=strategy_memory
-            )
+            rollout = trainer.collect_rollout(env, n_steps=steps_per_gen)
             loss = trainer.update(rollout)
             episode_rewards = rollout["episode_rewards"]
 
@@ -797,13 +716,11 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                 trainer.store_transition(concept, action, reward,
                                          next_concept, done, mask, next_mask)
 
-                strategy_memory.record_step(concept, action)
                 loss = trainer.update()
                 ep_reward += reward
                 steps += 1
 
                 if done:
-                    strategy_memory.end_episode(ep_reward)
                     episode_rewards.append(ep_reward)
                     ep_reward = 0.0
                     obs, info = env.reset()
@@ -837,41 +754,31 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
             "avg_reward": avg_reward,
             "n_episodes": len(episode_rewards),
             "time": gen_time,
-            "self_play": use_self_play_this_gen,
         }
         metrics_history.append(metrics)
 
         # Print progress every 5 generations
         if gen % 5 == 0 or gen == n_generations - 1:
-            eps_str = f"ε={trainer.epsilon:.3f}" if algo == "dqn" else ""
-            sp_str = " [SP]" if use_self_play_this_gen else ""
+            eps_str = f"eps={trainer.epsilon:.3f}" if algo == "dqn" else ""
             print(f"  Gen {gen:3d}/{n_generations} | "
                   f"Win={win_rate:.2%} (best={best_win_rate:.2%}) | "
                   f"Avg R={avg_reward:.3f} | "
                   f"Eps={len(episode_rewards)} | "
                   f"{eps_str} "
-                  f"Time={gen_time:.1f}s{sp_str}")
+                  f"Time={gen_time:.1f}s")
 
-        # Save checkpoint periodically (every 10 gens with self-play, 20 without)
-        save_interval = 10 if self_play else 20
-        if gen % save_interval == 0 or gen == n_generations - 1:
+        # Save checkpoint periodically
+        if gen % 20 == 0 or gen == n_generations - 1:
             policy_state = (trainer.policy.state_dict() if algo == "ppo"
                            else trainer.q_net.state_dict())
             checkpoint_path = os.path.join(save_dir, f"{algo}_bottleneck_gen{gen:04d}.pt")
             torch.save(policy_state, checkpoint_path)
 
-            # Add to opponent pool
-            opponent_pool.add_checkpoint(policy_state, gen, win_rate, prefix=f"{algo}_bn")
 
     # ---- Save final model and strategy memory ----
     final_state = (trainer.policy.state_dict() if algo == "ppo"
                   else trainer.q_net.state_dict())
     torch.save(final_state, os.path.join(save_dir, f"{algo}_bottleneck_final.pt"))
-
-    strategy_memory.save(os.path.join(save_dir, f"strategy_memory_{algo}.pkl"))
-    strategy_memory.export_to_json(
-        os.path.join(save_dir, f"strategies_{algo}.json"), top_k=50
-    )
 
     # Save metrics history
     import json
@@ -880,11 +787,10 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
 
     print(f"\n{algo.upper()} bottleneck training complete!")
     print(f"Best win rate: {best_win_rate:.2%}")
-    print(f"Strategies found: {len(strategy_memory.get_top_strategies())}")
 
     env.close()
     eval_env.close()
-    return trainer, strategy_memory, metrics_history
+    return trainer, metrics_history
 
 
 def main():
@@ -906,12 +812,6 @@ def main():
                         help="Directory to save bottleneck models")
     parser.add_argument("--baseline-dir", type=str, default="models/baseline",
                         help="Directory with trained baseline models")
-    parser.add_argument("--self-play", action="store_true",
-                        help="Enable self-play training against past versions")
-    parser.add_argument("--self-play-start", type=int, default=10,
-                        help="Generation to start self-play (default: 10)")
-    parser.add_argument("--self-play-ratio", type=float, default=0.5,
-                        help="Fraction of generations using self-play opponent (default: 0.5)")
     args = parser.parse_args()
 
     algos = [args.algo] if args.algo != "both" else ["ppo", "dqn"]
@@ -919,8 +819,6 @@ def main():
     for algo in algos:
         print(f"\n{'='*60}")
         print(f"Training {algo.upper()} Concept Bottleneck")
-        if args.self_play:
-            print(f"Self-play: ON (start={args.self_play_start}, ratio={args.self_play_ratio})")
         print(f"{'='*60}")
 
         train_bottleneck(
@@ -931,9 +829,6 @@ def main():
             seed=args.seed,
             save_dir=args.save_dir,
             baseline_dir=args.baseline_dir,
-            self_play=args.self_play,
-            self_play_start=args.self_play_start,
-            self_play_ratio=args.self_play_ratio,
         )
 
 

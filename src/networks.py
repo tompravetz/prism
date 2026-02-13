@@ -1,5 +1,5 @@
 """
-Neural network architectures for ASTRIA.
+Neural network architectures for PRISM.
 
 This module defines the encoder networks that transform raw observations into
 128-dimensional feature vectors, plus policy/value heads that map features to
@@ -92,10 +92,17 @@ class GoCNNEncoder(BaseFeaturesExtractor):
             nn.ReLU(),
         )
 
-        # Compute the size of the flattened CNN output
+        # Compute the size of the flattened CNN output dynamically
         # For 7x7 input with no pooling: 64 channels * 7 * 7 = 3136
+        # For 5x5 input: 64 * 5 * 5 = 1600 (used in curriculum learning)
+        if observation_space.shape[0] == 3:
+            # Channels-first: (C, H, W)
+            h, w = observation_space.shape[1], observation_space.shape[2]
+        else:
+            # Channels-last: (H, W, C)
+            h, w = observation_space.shape[0], observation_space.shape[1]
         with torch.no_grad():
-            sample = torch.zeros(1, n_input_channels, 7, 7)
+            sample = torch.zeros(1, n_input_channels, h, w)
             n_flatten = self.cnn(sample).flatten(1).shape[1]
 
         # The fully-connected head: compresses spatial features into a compact vector
@@ -353,9 +360,9 @@ def get_encoder_for_env(env_name: str, observation_space: spaces.Box,
     Returns:
         Encoder instance (GoCNNEncoder or SimpleMLPEncoder).
     """
-    if env_name in ("go", "go_7x7"):
+    if env_name in ("go", "go_7x7", "go_5x5"):
         return GoCNNEncoder(observation_space, features_dim)
-    elif env_name in ("cartpole", "lunarlander"):
+    elif env_name in ("cartpole", "lunarlander", "acrobot", "mountaincar"):
         return SimpleMLPEncoder(observation_space, features_dim)
     else:
         # Default to MLP for unknown environments
