@@ -99,7 +99,7 @@ Our contributions are:
 \section{Related Work}
 
 \paragraph{Concept Bottleneck Models.}
-Koh et al.~\citep{koh2020concept} introduced CBMs for supervised learning, where models predict human-defined concepts as an intermediate step. Extensions include stochastic~\citep{kim2023stochastic}, energy-based~\citep{xu2024energy}, and probabilistic~\citep{kim2023probabilistic} variants. Delfosse et al.~\citep{delfosse2024interpretable} extended CBMs to RL with SCoBots, using supervised object-centric concepts for Atari agents. All require domain-specific concept labels; \prism{} discovers concepts automatically and uses them for transfer.
+Koh et al.~\citep{koh2020concept} introduced CBMs for supervised learning, where models predict human-defined concepts as an intermediate step. Extensions include stochastic~\citep{vandenhirtz2024stochastic}, energy-based~\citep{xu2024energy}, and probabilistic~\citep{kim2023probabilistic} variants. Delfosse et al.~\citep{delfosse2024interpretable} extended CBMs to RL with SCoBots, using supervised object-centric concepts for Atari agents. All require domain-specific concept labels; \prism{} discovers concepts automatically and uses them for transfer.
 
 \paragraph{Transfer Learning in RL.}
 Transfer learning in RL aims to leverage knowledge from source tasks to accelerate learning on target tasks~\citep{taylor2009transfer}. Approaches include policy distillation~\citep{rusu2016policy}, where a student network is trained to mimic a teacher's behavior; progressive neural networks~\citep{rusu2016progressive}, which add lateral connections between task-specific columns; and successor features~\citep{barreto2017successor}, which separate task-specific reward weights from environment dynamics. These methods transfer at the level of neural network weights or features. \prism{} transfers at the level of \emph{discrete concepts}---a higher level of abstraction that is inherently more interpretable and composable.
@@ -749,7 +749,6 @@ A.~Barreto, W.~Dabney, R.~Munos, J.~J. Hunt, T.~Schaul, H.~P. van~Hasselt, and D
 \newblock Successor features for transfer in reinforcement learning.
 \newblock In \emph{NeurIPS}, 2017.
 
-
 \bibitem[Cohen and Welling(2016)]{cohen2016group}
 T.~Cohen and M.~Welling.
 \newblock Group equivariant convolutional networks.
@@ -785,8 +784,8 @@ E.~Kim, D.~Jung, S.~Park, S.~Kim, and S.~Yoon.
 \newblock Probabilistic concept bottleneck models.
 \newblock In \emph{ICML}, 2023.
 
-\bibitem[Vandenhirtz et~al.(2024)]{kim2023stochastic}
-M.~Vandenhirtz, S.~Laguna, R.~Marcinkevics, and J.~E. Vogt.
+\bibitem[Vandenhirtz et~al.(2024)]{vandenhirtz2024stochastic}
+M.~Vandenhirtz, S.~Laguna, R.~Marcinkevi{\v{c}}s, and J.~E. Vogt.
 \newblock Stochastic concept bottleneck models.
 \newblock In \emph{NeurIPS}, 2024.
 
@@ -809,7 +808,6 @@ V.~Mnih, K.~Kavukcuoglu, D.~Silver, et~al.
 O.~Nachum, S.~S. Gu, H.~Lee, and S.~Levine.
 \newblock Data-efficient hierarchical reinforcement learning.
 \newblock In \emph{NeurIPS}, 2018.
-
 
 \bibitem[Ross et~al.(2011)]{ross2011reduction}
 S.~Ross, G.~J. Gordon, and D.~Bagnell.
@@ -836,7 +834,6 @@ J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov.
 \newblock Proximal policy optimization algorithms.
 \newblock \emph{arXiv preprint arXiv:1707.06347}, 2017.
 
-
 \bibitem[Sutton et~al.(1999)]{sutton1999between}
 R.~S. Sutton, D.~Precup, and S.~Singh.
 \newblock Between MDPs and semi-MDPs: A framework for temporal abstraction in reinforcement learning.
@@ -851,7 +848,6 @@ M.~E. Taylor and P.~Stone.
 J.~Terry, B.~Black, N.~Grammel, et~al.
 \newblock PettingZoo: Gym for multi-agent reinforcement learning.
 \newblock In \emph{NeurIPS}, 2021.
-
 
 \bibitem[Xu et~al.(2024)]{xu2024energy}
 X.~Xu, Y.~Qin, L.~Mi, H.~Wang, and X.~Li.
@@ -910,9 +906,10 @@ python experiments/transfer_cross_domain.py
 
 All experiments were run on a consumer desktop:
 \begin{itemize}[leftmargin=*]
-    \item CPU: Intel Core (consumer-grade), no GPU required
-    \item RAM: 16 GB
-    \item OS: Windows 10/11
+    \item CPU: Intel Core i5-13600K (CPU only, no GPU required)
+    \item GPU: NVIDIA RTX 2070 (available but not used for training)
+    \item RAM: 64 GB DDR5
+    \item OS: Windows 11
     \item Python: 3.12, PyTorch 2.x, Stable-Baselines3
 \end{itemize}
 
