@@ -83,8 +83,10 @@ def load_ppo_dqn_agents(device):
 
 
 def evaluate_mapping(mapping, source_policy, target_encoder, target_cm,
-                     aligner, n_episodes=100, device=None):
+                     aligner, n_episodes=100, device=None, gnugo_level=None):
     """Evaluate a specific concept mapping for PPO->DQN transfer."""
+    from visualizer.opponents import GnuGoOpponent
+
     device = device or get_device()
 
     transferred = aligner.transfer_policy(
@@ -94,7 +96,12 @@ def evaluate_mapping(mapping, source_policy, target_encoder, target_cm,
     transferred.to(device)
     transferred.eval()
 
-    env = GoEnv(board_size=7)
+    if gnugo_level is not None:
+        opponent = GnuGoOpponent(level=gnugo_level)
+    else:
+        opponent = None
+
+    env = GoEnv(board_size=7, opponent_fn=opponent)
 
     def agent_fn(obs, action_mask):
         concept_id = target_cm.assign_concept_from_obs(target_encoder, obs, device)
@@ -102,10 +109,12 @@ def evaluate_mapping(mapping, source_policy, target_encoder, target_cm,
 
     results = evaluate_agent(agent_fn, env, n_episodes=n_episodes)
     env.close()
+    if opponent is not None:
+        opponent.close()
     return results
 
 
-def run_alignment_comparison(n_seeds=5, n_eval=100):
+def run_alignment_comparison(n_seeds=5, n_eval=100, gnugo_level=None):
     """
     Compare 5 alignment methods on the PPO->DQN transfer pair.
 
@@ -224,6 +233,7 @@ def run_alignment_comparison(n_seeds=5, n_eval=100):
                 mapping, ppo["policy"],
                 dqn["encoder"], dqn["cm"], aligner,
                 n_episodes=n_eval, device=device,
+                gnugo_level=gnugo_level,
             )
 
             seed_wrs.append(eval_result["win_rate"])
@@ -369,6 +379,10 @@ if __name__ == "__main__":
                         help="Number of evaluation seeds (default: 5)")
     parser.add_argument("--n-eval", type=int, default=100,
                         help="Games per evaluation (default: 100)")
+    parser.add_argument("--gnugo-level", type=int, default=None,
+                        help="Evaluate vs GnuGo at this level instead of random "
+                             "(recommended: 1 for comparability with other results)")
     args = parser.parse_args()
 
-    run_alignment_comparison(n_seeds=args.n_seeds, n_eval=args.n_eval)
+    run_alignment_comparison(n_seeds=args.n_seeds, n_eval=args.n_eval,
+                             gnugo_level=args.gnugo_level)

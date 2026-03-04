@@ -170,13 +170,15 @@ def eval_agent_vs_gnugo(agent_fn, encoder, cm, gnugo_level=1,
     """
     Evaluate a concept bottleneck agent against GnuGo.
 
-    The agent plays as Black (first mover). GnuGo plays as White.
+    The agent plays as Black (first mover). GnuGo plays as White via
+    GoEnv's opponent_fn interface — the same pattern used by the visualizer.
+    This ensures the agent always receives correct board observations.
 
     Args:
         agent_fn: Function(obs, action_mask) -> action_int.
-        encoder: Agent's encoder (for feature extraction).
-        cm: Agent's concept manager.
-        gnugo_level: GnuGo playing strength (1-10).
+        encoder: Agent's encoder (unused here; baked into agent_fn).
+        cm: Agent's concept manager (unused here; baked into agent_fn).
+        gnugo_level: GnuGo playing strength (0-10).
         n_games: Number of games to play.
         board_size: Board size.
         device: Torch device.
@@ -184,105 +186,58 @@ def eval_agent_vs_gnugo(agent_fn, encoder, cm, gnugo_level=1,
     Returns:
         Dict with win_rate, wins, losses, draws, game_lengths.
     """
+    from visualizer.opponents import GnuGoOpponent
+
     device = device or get_device()
     wins, losses, draws = 0, 0, 0
     game_lengths = []
 
-    for game_idx in range(n_games):
-        try:
-            gtp = GTPInterface(level=gnugo_level, board_size=board_size)
-            gtp.clear_board()
-        except FileNotFoundError:
-            print(f"  GnuGo not found! Skipping evaluation.")
-            return {
-                "win_rate": 0.0, "wins": 0, "losses": 0, "draws": 0,
-                "game_lengths": [], "error": "GnuGo binary not found",
-            }
+    # Create the GnuGo opponent once; reset its board state between games.
+    try:
+        gnugo = GnuGoOpponent(level=gnugo_level, board_size=board_size)
+    except Exception as e:
+        print(f"  GnuGo not found! Skipping evaluation. ({e})")
+        return {
+            "win_rate": 0.0, "wins": 0, "losses": 0, "draws": 0,
+            "game_lengths": [], "error": str(e),
+        }
 
-        env = GoEnv(board_size=board_size)
+    for game_idx in range(n_games):
+        gnugo.reset()
+        # Pass GnuGo as opponent_fn so GoEnv drives white's turns correctly —
+        # identical to how the visualizer records games.
+        env = GoEnv(board_size=board_size, opponent_fn=gnugo)
         obs, info = env.reset()
+
         done = False
         move_count = 0
-        consecutive_passes = 0
+        last_reward = 0.0
 
         while not done and move_count < 200:
             action_mask = info.get("action_mask", None)
-
-            # Agent (Black) plays
             action = agent_fn(obs, action_mask)
             move_count += 1
-
-            if action >= board_size * board_size:
-                # Pass
-                gtp.play_pass("black")
-                consecutive_passes += 1
-            else:
-                row = action // board_size
-                col = action % board_size
-                try:
-                    gtp.play("black", row, col)
-                    consecutive_passes = 0
-                except RuntimeError:
-                    # Illegal move — play pass instead
-                    gtp.play_pass("black")
-                    consecutive_passes += 1
-
-            # Apply agent move to local env
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            if done:
+                last_reward = float(reward)
 
-            if done or consecutive_passes >= 2:
-                break
-
-            # GnuGo (White) plays
-            gnugo_response = gtp.genmove("white")
-            if gnugo_response == "resign":
-                wins += 1
-                gtp.close()
-                env.close()
-                game_lengths.append(move_count)
-                continue
-            elif gnugo_response == "pass":
-                consecutive_passes += 1
-                # Pass in our env
-                pass_action = board_size * board_size
-                obs, reward, terminated, truncated, info = env.step(pass_action)
-                done = terminated or truncated
-            else:
-                gnugo_row, gnugo_col = gnugo_response
-                gnugo_action = gnugo_row * board_size + gnugo_col
-                consecutive_passes = 0
-                # Apply GnuGo move
-                if action_mask is not None and gnugo_action < len(info.get("action_mask", [])):
-                    obs, reward, terminated, truncated, info = env.step(gnugo_action)
-                    done = terminated or truncated
-                else:
-                    # GnuGo played somewhere we can't handle — end game
-                    break
-
-            if consecutive_passes >= 2:
-                break
-
-        # Determine winner via score
-        try:
-            score = gtp.final_score()
-            if score.startswith("B+"):
-                wins += 1
-            elif score.startswith("W+"):
-                losses += 1
-            else:
-                draws += 1
-        except Exception:
-            losses += 1  # Default to loss on error
+        # Winner determined by GoEnv's terminal reward (+1 black, -1 white).
+        if last_reward > 0.5:
+            wins += 1
+        elif last_reward < -0.5:
+            losses += 1
+        else:
+            draws += 1
 
         game_lengths.append(move_count)
-        gtp.close()
         env.close()
 
         if (game_idx + 1) % 10 == 0:
             wr = wins / (game_idx + 1)
             print(f"    Game {game_idx+1}/{n_games}: W={wins} L={losses} D={draws} WR={wr:.2%}")
 
+    gnugo.close()
     total = wins + losses + draws
     win_rate = wins / total if total > 0 else 0.0
 
@@ -414,4 +369,129 @@ def run_gnugo_evaluation():
 
 
 if __name__ == "__main__":
-    run_gnugo_evaluation()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Evaluate PRISM bottleneck agent against GnuGo"
+    )
+    parser.add_argument(
+        "--algo", choices=["ppo", "dqn"], default="ppo",
+        help="Which bottleneck agent to evaluate (default: ppo)"
+    )
+    parser.add_argument(
+        "--level", type=int, default=1, metavar="N",
+        help="GnuGo strength level 0-10 (default: 1)"
+    )
+    parser.add_argument(
+        "--games", type=int, default=20,
+        help="Number of games to play (default: 20)"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="RNG seed (default: 42)"
+    )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Run the full multi-agent, multi-level evaluation suite"
+    )
+    parser.add_argument(
+        "--bottleneck-dir", type=str, default="models/bottleneck",
+        help="Directory containing bottleneck model and concepts "
+             "(default: models/bottleneck). Use models/bottleneck_dagger "
+             "to evaluate the DAgger-encoder bottleneck."
+    )
+    parser.add_argument(
+        "--encoder-dir", type=str, default="models/baseline",
+        help="Directory containing the encoder .pt file "
+             "(default: models/baseline)."
+    )
+    args = parser.parse_args()
+
+    if args.full:
+        run_gnugo_evaluation()
+    else:
+        # Quick single-agent evaluation
+        set_seed(args.seed)
+        device = get_device()
+
+        bottleneck_dir = args.bottleneck_dir
+        encoder_dir = args.encoder_dir
+        print(f"\nLoading {args.algo.upper()} bottleneck agent "
+              f"(bottleneck_dir={bottleneck_dir})...")
+        env = GoEnv(board_size=7)
+        encoder = GoCNNEncoder(env.observation_space, features_dim=128)
+        encoder.load_state_dict(
+            torch.load(f"{encoder_dir}/{args.algo}_go_encoder.pt",
+                       map_location=device, weights_only=True)
+        )
+        encoder.to(device).eval()
+
+        cm = ConceptManager(n_concepts=64)
+        cm.load(f"{bottleneck_dir}/concepts_{args.algo}_k64.pkl")
+
+        if args.algo == "dqn":
+            policy = ConceptDQNPolicy(
+                n_concepts=64, embed_dim=64, hidden_dim=128, n_actions=50,
+            )
+            policy.load_state_dict(
+                torch.load(f"{bottleneck_dir}/{args.algo}_bottleneck_final.pt",
+                           map_location=device, weights_only=True)
+            )
+            policy.to(device).eval()
+
+            def agent_fn(obs, mask):
+                c = cm.assign_concept_from_obs(encoder, obs, device)
+                return policy.get_action(c, mask, epsilon=0.0)
+        else:
+            policy = ConceptBottleneckPolicy(
+                n_concepts=64, embed_dim=64, hidden_dim=128, n_actions=50,
+            )
+            policy.load_state_dict(
+                torch.load(f"{bottleneck_dir}/{args.algo}_bottleneck_final.pt",
+                           map_location=device, weights_only=True)
+            )
+            policy.to(device).eval()
+
+            def agent_fn(obs, mask):
+                c = cm.assign_concept_from_obs(encoder, obs, device)
+                return policy.get_action(c, mask, deterministic=True)
+        env.close()
+
+        print(f"Evaluating {args.algo.upper()} vs GnuGo Level {args.level} "
+              f"({args.games} games, seed={args.seed})...\n")
+        result = eval_agent_vs_gnugo(
+            agent_fn, encoder, cm,
+            gnugo_level=args.level, n_games=args.games, device=device,
+        )
+        print(f"\n{'='*50}")
+        print(f"  {args.algo.upper()} vs GnuGo Level {args.level}")
+        print(f"  W={result['wins']}  L={result['losses']}  D={result['draws']}"
+              f"  ({result['total_games']} games)")
+        print(f"  Win rate: {result['win_rate']:.1%}")
+        if result.get("error"):
+            print(f"  Error: {result['error']}")
+        print(f"{'='*50}")
+
+        # Save single-run results so downstream scripts can aggregate them
+        ensure_dir("results")
+        tag = "" if bottleneck_dir == "models/bottleneck" else "_dagger"
+        out_path = f"results/eval_strong_{args.algo}{tag}_L{args.level}.json"
+        save_data = {
+            "algo": args.algo,
+            "level": args.level,
+            "n_games": args.games,
+            "seed": args.seed,
+            **result,
+        }
+
+        def _convert(obj):
+            if isinstance(obj, (np.floating, np.integer)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+
+        with open(out_path, "w") as f:
+            import json as _json
+            _json.dump(save_data, f, indent=2, default=_convert)
+        print(f"Results saved to {out_path}")

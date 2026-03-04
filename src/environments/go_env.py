@@ -270,6 +270,10 @@ class GoEnv(gym.Env):
         self._env = self._create_env()
         self._env.reset(seed=seed)
 
+        # Notify opponent of new game (e.g. GnuGo needs clear_board between games)
+        if hasattr(self.opponent_fn, 'reset'):
+            self.opponent_fn.reset()
+
         # Handle edge case: if opponent somehow goes first
         self._handle_opponent_turns()
 

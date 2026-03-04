@@ -84,10 +84,11 @@ class ConceptBottleneckPolicy(nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            cid = torch.LongTensor([concept_id])
+            device = next(self.parameters()).device
+            cid = torch.LongTensor([concept_id]).to(device)
             mask = None
             if action_mask is not None:
-                mask = torch.FloatTensor(action_mask).unsqueeze(0)
+                mask = torch.FloatTensor(action_mask).unsqueeze(0).to(device)
 
             logits, _ = self.forward(cid, mask)
             logits = logits[0]
@@ -253,9 +254,10 @@ class ConceptDQNPolicy(nn.Module):
 
         self.eval()
         with torch.no_grad():
-            cid = torch.LongTensor([concept_id])
+            device = next(self.parameters()).device
+            cid = torch.LongTensor([concept_id]).to(device)
             mask = None
             if action_mask is not None:
-                mask = torch.FloatTensor(action_mask).unsqueeze(0)
+                mask = torch.FloatTensor(action_mask).unsqueeze(0).to(device)
             q_values = self.forward(cid, mask)[0]
             return q_values.argmax().item()

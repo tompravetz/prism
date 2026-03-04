@@ -179,7 +179,8 @@ def train_distilled_policy(teacher_data, n_concepts=64, n_actions=50,
 # ============================================================
 
 def direct_finetune(source_encoder, target_cm, n_generations=50,
-                    steps_per_gen=20000, device=None):
+                    steps_per_gen=20000, device=None, train_opponent=None,
+                    eval_opponent=None):
     """
     Fine-tune a bottleneck policy using a transferred encoder's concept space.
 
@@ -213,8 +214,8 @@ def direct_finetune(source_encoder, target_cm, n_generations=50,
         lr=3e-4, gamma=0.99, device=device,
     )
 
-    env = GoEnv(board_size=7)
-    eval_env = GoEnv(board_size=7)
+    env = GoEnv(board_size=7, opponent_fn=train_opponent)
+    eval_env = GoEnv(board_size=7, opponent_fn=eval_opponent)
     learning_curve = []
 
     print(f"    Training from-scratch bottleneck ({n_generations} generations)...")
@@ -243,7 +244,7 @@ def direct_finetune(source_encoder, target_cm, n_generations=50,
 # ============================================================
 
 def random_concept_transfer(source_policy, source_cm, target_cm, target_encoder,
-                            n_episodes=100, device=None):
+                            n_episodes=100, device=None, opponent_fn=None):
     """
     Transfer with a random 1:1 concept mapping instead of Hungarian alignment.
 
@@ -258,6 +259,7 @@ def random_concept_transfer(source_policy, source_cm, target_cm, target_encoder,
         target_encoder: Target agent's encoder.
         n_episodes: Number of evaluation games.
         device: Torch device.
+        opponent_fn: Optional GnuGoOpponent (or None for random opponent).
 
     Returns:
         Dict with win_rate and the random mapping used.
@@ -279,7 +281,7 @@ def random_concept_transfer(source_policy, source_cm, target_cm, target_encoder,
     transferred.eval()
 
     # Evaluate
-    env = GoEnv(board_size=7)
+    env = GoEnv(board_size=7, opponent_fn=opponent_fn)
 
     def agent_fn(obs, action_mask):
         concept_id = target_cm.assign_concept_from_obs(target_encoder, obs, device)
@@ -299,11 +301,14 @@ def random_concept_transfer(source_policy, source_cm, target_cm, target_encoder,
 # Main experiment
 # ============================================================
 
-def run_transfer_baselines():
+def run_transfer_baselines(gnugo_level=None):
     """
     Run all transfer baselines and compare against PRISM concept transfer.
 
     Focus on the PPO -> DQN pair (the strongest transfer result at 95% WR).
+
+    Args:
+        gnugo_level: If set, evaluate vs GnuGo at this level instead of random.
     """
     set_seed(42)
     device = get_device()
@@ -314,6 +319,15 @@ def run_transfer_baselines():
     print(f"[{timestamp}] ============================================================")
 
     results = {}
+
+    # Create shared GnuGo opponent for all zero-shot evaluations (None = random)
+    eval_opponent = None
+    if gnugo_level is not None:
+        from visualizer.opponents import GnuGoOpponent
+        eval_opponent = GnuGoOpponent(level=gnugo_level)
+        print(f"  Using GnuGo Level {gnugo_level} for evaluation.")
+    else:
+        print(f"  Using random opponent for evaluation.")
 
     # Load PPO agent (source)
     print(f"\n--- Loading PPO (source) ---")
@@ -372,7 +386,7 @@ def run_transfer_baselines():
     transferred_policy.eval()
 
     # Evaluate PRISM transfer
-    eval_env = GoEnv(board_size=7)
+    eval_env = GoEnv(board_size=7, opponent_fn=eval_opponent)
 
     def agent_fn_prism(obs, mask):
         c = dqn_cm.assign_concept_from_obs(dqn_encoder, obs, device)
@@ -421,7 +435,7 @@ def run_transfer_baselines():
     distill_env2.close()
 
     # Evaluate distilled policy using PPO encoder (same concept space)
-    eval_env = GoEnv(board_size=7)
+    eval_env = GoEnv(board_size=7, opponent_fn=eval_opponent)
 
     def agent_fn_distill(obs, mask):
         c = ppo_cm.assign_concept_from_obs(ppo_encoder, obs, device)
@@ -445,6 +459,7 @@ def run_transfer_baselines():
     scratch_policy, scratch_curve = direct_finetune(
         dqn_encoder, dqn_cm,
         n_generations=50, steps_per_gen=20000, device=device,
+        eval_opponent=eval_opponent,
     )
 
     # Find generations to reach 90%
@@ -472,7 +487,7 @@ def run_transfer_baselines():
         np.random.seed(seed)
         rr = random_concept_transfer(
             ppo_policy, ppo_cm, dqn_cm, dqn_encoder,
-            n_episodes=100, device=device,
+            n_episodes=100, device=device, opponent_fn=eval_opponent,
         )
         random_results.append(rr["win_rate"])
         print(f"  Seed {seed}: win_rate={rr['win_rate']:.2%}")
@@ -489,8 +504,13 @@ def run_transfer_baselines():
     # ============================================================
     # Save results
     # ============================================================
+    # Close shared opponent
+    if eval_opponent is not None:
+        eval_opponent.close()
+
     ensure_dir("results")
-    output_path = "results/transfer_baselines.json"
+    suffix = f"_L{gnugo_level}" if gnugo_level is not None else "_random"
+    output_path = f"results/transfer_baselines{suffix}.json"
 
     def convert(obj):
         if isinstance(obj, (np.floating, np.integer)):
@@ -570,4 +590,9 @@ def run_transfer_baselines():
 
 
 if __name__ == "__main__":
-    run_transfer_baselines()
+    import argparse
+    parser = argparse.ArgumentParser(description="Transfer Baselines: PPO -> DQN")
+    parser.add_argument("--gnugo-level", type=int, default=None,
+                        help="Evaluate vs GnuGo at this level (default: random opponent)")
+    args = parser.parse_args()
+    run_transfer_baselines(gnugo_level=args.gnugo_level)

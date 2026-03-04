@@ -121,6 +121,12 @@ class ConceptManager:
         print(f"Collected {len(all_features)} features from {n_episodes} policy episodes "
               f"(total: {self.n_samples_collected})")
 
+    def fit_from_array(self, features: np.ndarray):
+        """Fit K-Means directly on a pre-collected numpy feature array."""
+        self._collected_features = [np.asarray(features, dtype=np.float32)]
+        self.n_samples_collected = len(features)
+        return self.fit()
+
     def fit(self):
         """Fit K-Means on all collected features."""
         if not self._collected_features:
@@ -221,21 +227,22 @@ class ConceptManager:
         self.is_fitted = data["is_fitted"]
         self.n_samples_collected = data["n_samples_collected"]
 
-        # Re-initialize KMeans with loaded centers
+        # Re-initialize KMeans with loaded centers using dummy fit
         if self.is_fitted:
             self.kmeans = MiniBatchKMeans(
                 n_clusters=self.n_concepts,
                 random_state=self.random_state,
                 batch_size=1024,
                 n_init=1,
-                init=self.cluster_centers,
             )
-            # Fake-fit to set internal state
-            self.kmeans.cluster_centers_ = self.cluster_centers
-            self.kmeans._check_params = lambda X: None
-            # Mark as fitted
-            self.kmeans.n_features_in_ = self.features_dim
-            self.kmeans._n_threads = 1
+            # Fit on dummy data to initialise all internal sklearn state cleanly
+            # (avoids monkey-patching private sklearn APIs that change across versions)
+            dummy = np.zeros(
+                (self.n_concepts, self.cluster_centers.shape[1]), dtype=np.float32
+            )
+            self.kmeans.fit(dummy)
+            # Overwrite dummy centres with the real loaded centres
+            self.kmeans.cluster_centers_ = self.cluster_centers.copy()
 
         print(f"ConceptManager loaded from {path} ({self.n_concepts} concepts)")
         return self

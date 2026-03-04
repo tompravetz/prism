@@ -222,7 +222,8 @@ def find_most_frequent_concepts(encoder, concept_manager, policy, env,
 def run_ablation_experiment(algo="ppo", n_eval=500, top_k=20,
                             n_concepts=64, seed=42,
                             model_dir="models/bottleneck",
-                            baseline_dir="models/baseline"):
+                            baseline_dir="models/baseline",
+                            gnugo_level=None):
     """
     Run the complete concept ablation experiment.
 
@@ -237,7 +238,14 @@ def run_ablation_experiment(algo="ppo", n_eval=500, top_k=20,
     device = get_device()
 
     # ---- Load models ----
-    env = GoEnv(board_size=7)
+    _opponent = None
+    if gnugo_level is not None:
+        from visualizer.opponents import GnuGoOpponent
+        _opponent = GnuGoOpponent(level=gnugo_level)
+        print(f"  Opponent: GnuGo Level {gnugo_level}")
+    else:
+        print(f"  Opponent: random")
+    env = GoEnv(board_size=7, opponent_fn=_opponent)
     encoder = GoCNNEncoder(env.observation_space, features_dim=128)
 
     encoder_path = os.path.join(baseline_dir, f"{algo}_go_encoder.pt")
@@ -374,11 +382,15 @@ def run_ablation_experiment(algo="ppo", n_eval=500, top_k=20,
 
     # Save
     ensure_dir("results")
-    with open(f"results/ablation_{algo}.json", "w") as f:
+    suffix = f"_L{gnugo_level}" if gnugo_level is not None else "_random"
+    out_path = f"results/ablation_{algo}{suffix}.json"
+    with open(out_path, "w") as f:
         json.dump(full_results, f, indent=2)
-    print(f"Results saved to results/ablation_{algo}.json")
+    print(f"Results saved to {out_path}")
 
     env.close()
+    if _opponent is not None:
+        _opponent.close()
     return full_results
 
 
@@ -394,6 +406,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--model-dir", type=str, default="models/bottleneck")
     parser.add_argument("--baseline-dir", type=str, default="models/baseline")
+    parser.add_argument("--gnugo-level", type=int, default=None,
+                        help="Evaluate vs GnuGo at this level (default: random)")
     args = parser.parse_args()
 
     algos = [args.algo] if args.algo != "both" else ["ppo", "dqn"]
@@ -406,6 +420,7 @@ def main():
             algo=algo, n_eval=args.n_eval, top_k=args.top_k,
             n_concepts=args.n_concepts, seed=args.seed,
             model_dir=args.model_dir, baseline_dir=args.baseline_dir,
+            gnugo_level=args.gnugo_level,
         )
 
 

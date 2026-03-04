@@ -126,7 +126,8 @@ def load_agent(agent_name, device):
     return encoder, cm, policy
 
 
-def evaluate_transferred_policy(encoder, cm, policy, n_episodes=100, device=None):
+def evaluate_transferred_policy(encoder, cm, policy, n_episodes=100, device=None,
+                                gnugo_level=None):
     """
     Evaluate a transferred policy using the TARGET encoder and concept manager
     but a SOURCE-derived (remapped) policy.
@@ -139,12 +140,19 @@ def evaluate_transferred_policy(encoder, cm, policy, n_episodes=100, device=None
         policy: Transferred policy (with remapped embeddings).
         n_episodes: Number of evaluation games.
         device: Torch device.
+        gnugo_level: If set, evaluate vs GnuGo at this level instead of random.
 
     Returns:
         Dict with win_rate, mean_reward, mean_length.
     """
     device = device or get_device()
-    env = GoEnv(board_size=7)
+
+    opponent = None
+    if gnugo_level is not None:
+        from visualizer.opponents import GnuGoOpponent
+        opponent = GnuGoOpponent(level=gnugo_level)
+
+    env = GoEnv(board_size=7, opponent_fn=opponent)
 
     def agent_fn(obs, action_mask):
         # Convert obs -> concept via target encoder + target concepts
@@ -157,6 +165,8 @@ def evaluate_transferred_policy(encoder, cm, policy, n_episodes=100, device=None
 
     results = evaluate_agent(agent_fn, env, n_episodes=n_episodes)
     env.close()
+    if opponent is not None:
+        opponent.close()
     return results
 
 
@@ -450,7 +460,7 @@ def run_experiment(do_warm_start=False, warm_start_gens=20):
     return results
 
 
-def run_multi_seed_experiment(n_seeds=5, n_eval=100):
+def run_multi_seed_experiment(n_seeds=5, n_eval=100, gnugo_level=None):
     """
     Run agent-to-agent transfer with multiple seeds for statistical significance.
 
@@ -461,6 +471,7 @@ def run_multi_seed_experiment(n_seeds=5, n_eval=100):
     Args:
         n_seeds: Number of evaluation seeds per pair.
         n_eval: Number of games per evaluation.
+        gnugo_level: If set, evaluate vs GnuGo at this level instead of random.
 
     Returns:
         Dict with per-pair results, aggregate stats, and significance tests.
@@ -511,16 +522,20 @@ def run_multi_seed_experiment(n_seeds=5, n_eval=100):
             # Evaluate with multiple seeds
             seed_wrs = []
             seed_rewards = []
+            seed_lengths = []
 
             for seed in range(n_seeds):
                 set_seed(seed * 1000)
                 eval_result = evaluate_transferred_policy(
                     tgt["encoder"], tgt["cm"], transferred_policy,
                     n_episodes=n_eval, device=device,
+                    gnugo_level=gnugo_level,
                 )
                 seed_wrs.append(eval_result["win_rate"])
                 seed_rewards.append(eval_result["mean_reward"])
-                print(f"    Seed {seed}: wr={eval_result['win_rate']:.2%}")
+                seed_lengths.append(eval_result["mean_length"])
+                print(f"    Seed {seed}: wr={eval_result['win_rate']:.2%}, "
+                      f"avg_moves={eval_result['mean_length']:.1f}")
 
             # Statistical test: one-sample t-test vs 50% (random baseline)
             if n_seeds >= 2:
@@ -553,6 +568,7 @@ def run_multi_seed_experiment(n_seeds=5, n_eval=100):
                 "ci_95_upper": float(ci_95[1]),
                 "mean_reward": float(np.mean(seed_rewards)),
                 "std_reward": float(np.std(seed_rewards)),
+                "mean_length": float(np.mean(seed_lengths)),
                 "vs_random_ttest": {
                     "t_statistic": float(t_stat),
                     "p_value": float(p_value),
@@ -566,10 +582,12 @@ def run_multi_seed_experiment(n_seeds=5, n_eval=100):
 
     # Save
     ensure_dir("results")
-    output_path = "results/transfer_same_task_5seed.json"
+    suffix = f"_L{gnugo_level}" if gnugo_level is not None else "_random"
+    output_path = f"results/transfer_same_task_{n_seeds}seed{suffix}.json"
     save_data = {
         "n_seeds": n_seeds,
         "n_eval": n_eval,
+        "opponent": f"gnugo_L{gnugo_level}" if gnugo_level is not None else "random",
         "pairs": results,
     }
     with open(output_path, "w") as f:
@@ -592,6 +610,203 @@ def run_multi_seed_experiment(n_seeds=5, n_eval=100):
     return results
 
 
+def run_from_scratch_comparison(
+    win_rate_threshold=0.60,
+    gnugo_level=1,
+    steps_per_checkpoint=10_000,
+    max_total_steps=500_000,
+    n_eval_games=50,
+    seed=42,
+):
+    """
+    Headline comparison: PPO-transferred concepts vs DQN from scratch.
+
+    Trains a DQN bottleneck from scratch using the DQN encoder and DQN concepts
+    (no PPO transfer).  Measures how many training steps are needed to first
+    reach `win_rate_threshold` vs GnuGo Level `gnugo_level`.
+
+    Also loads the zero-shot PPO→DQN transferred policy and evaluates it at
+    step 0 (no extra training) — this is the from-transfer baseline.
+
+    The speedup ratio = (steps for scratch to reach threshold) /
+                        (steps for transfer to reach threshold, or 0 if already there).
+
+    Outputs: results/transfer_scratch_comparison.json
+    """
+    from train_bottleneck import DQNBottleneckTrainer, discover_concepts
+    from experiments.eval_strong import eval_agent_vs_gnugo
+
+    set_seed(seed)
+    device = get_device()
+
+    print(f"\n{'='*60}")
+    print(f"From-Scratch vs Transfer Comparison")
+    print(f"  DQN scratch vs PPO→DQN zero-shot transfer")
+    print(f"  Target: {win_rate_threshold:.0%} vs GnuGo L{gnugo_level}")
+    print(f"  Max steps: {max_total_steps:,}")
+    print(f"{'='*60}\n")
+
+    # ---- Load PPO→DQN transferred policy (step-0 baseline) ----
+    print("Loading PPO source + DQN target agents for zero-shot transfer...")
+    ppo_enc, ppo_cm, ppo_policy = load_agent("PPO", device)
+    dqn_enc, dqn_cm, _          = load_agent("DQN", device)
+
+    aligner = ConceptAligner(ppo_cm, dqn_cm)
+    mapping = aligner.hungarian_alignment()
+    transferred_policy = aligner.transfer_policy(
+        ppo_policy, mapping,
+        target_n_concepts=dqn_cm.n_concepts,
+        target_n_actions=50,
+    )
+    transferred_policy.to(device).eval()
+
+    def transfer_fn(obs, mask):
+        c = dqn_cm.assign_concept_from_obs(dqn_enc, obs, device)
+        return transferred_policy.get_action(c, mask, deterministic=True)
+
+    # Also evaluate DAgger→DQN if DAgger model exists
+    dagger_zero_shot_wr = None
+    if os.path.exists(AGENTS["DAgger"]["encoder_path"]):
+        dag_enc, dag_cm, dag_policy = load_agent("DAgger", device)
+        dagger_aligner = ConceptAligner(dag_cm, dqn_cm)
+        dagger_mapping  = dagger_aligner.hungarian_alignment()
+        dagger_transferred = dagger_aligner.transfer_policy(
+            dag_policy, dagger_mapping,
+            target_n_concepts=dqn_cm.n_concepts,
+            target_n_actions=50,
+        )
+        dagger_transferred.to(device).eval()
+
+        def dagger_fn(obs, mask):
+            c = dqn_cm.assign_concept_from_obs(dqn_enc, obs, device)
+            return dagger_transferred.get_action(c, mask, deterministic=True)
+
+        print(f"Evaluating DAgger→DQN zero-shot vs GnuGo L{gnugo_level}...")
+        dagger_r = eval_agent_vs_gnugo(
+            dagger_fn, dqn_enc, dqn_cm,
+            gnugo_level=gnugo_level, n_games=n_eval_games, device=device,
+        )
+        dagger_zero_shot_wr = dagger_r["win_rate"]
+        print(f"  DAgger→DQN zero-shot: {dagger_zero_shot_wr:.1%}")
+
+    print(f"Evaluating PPO→DQN zero-shot vs GnuGo L{gnugo_level}...")
+    transfer_r = eval_agent_vs_gnugo(
+        transfer_fn, dqn_enc, dqn_cm,
+        gnugo_level=gnugo_level, n_games=n_eval_games, device=device,
+    )
+    transfer_zero_shot_wr = transfer_r["win_rate"]
+    print(f"  PPO→DQN zero-shot: {transfer_zero_shot_wr:.1%}")
+
+    # ---- Train DQN from scratch and measure convergence ----
+    print(f"\nTraining DQN from scratch (checkpoint every {steps_per_checkpoint:,} steps)...")
+
+    scratch_trainer = DQNBottleneckTrainer(
+        encoder=dqn_enc,
+        concept_manager=dqn_cm,
+        n_actions=50,
+        n_concepts=dqn_cm.n_concepts,
+        lr=1e-3,
+        device=device,
+    )
+
+    env = GoEnv(board_size=7)
+    obs, info = env.reset()
+
+    scratch_curve = []        # [(steps, win_rate)]
+    scratch_threshold_steps = None
+    transfer_threshold_steps = 0 if transfer_zero_shot_wr >= win_rate_threshold else None
+    steps_done = 0
+    checkpoint_idx = 0
+
+    # Evaluate transfer policy against thresholds at each checkpoint too
+    transfer_curve = [{"steps": 0, "win_rate": transfer_zero_shot_wr}]
+
+    while steps_done < max_total_steps:
+        # One environment step
+        mask = info.get("action_mask", None)
+        cid = scratch_trainer.get_concept(obs)
+        action = scratch_trainer.select_action(cid, mask)
+        next_obs, reward, terminated, truncated, next_info = env.step(action)
+        done = terminated or truncated
+        next_mask = next_info.get("action_mask", np.ones(50, dtype=np.int8))
+        next_cid = scratch_trainer.get_concept(next_obs)
+        if mask is None:
+            mask = np.ones(50, dtype=np.int8)
+        scratch_trainer.store_transition(cid, action, reward, next_cid,
+                                         done, mask, next_mask)
+        scratch_trainer.update()
+        steps_done += 1
+
+        if done:
+            obs, info = env.reset()
+        else:
+            obs, info = next_obs, next_info
+
+        # Checkpoint evaluation
+        if steps_done % steps_per_checkpoint == 0:
+            checkpoint_idx += 1
+            scratch_trainer.q_net.eval()
+
+            def scratch_fn(ob, msk):
+                c = scratch_trainer.get_concept(ob)
+                return scratch_trainer.q_net.get_action(c, msk, epsilon=0.0)
+
+            eval_env = GoEnv(board_size=7)
+            r = evaluate_agent(scratch_fn, eval_env, n_episodes=n_eval_games)
+            eval_env.close()
+            wr = r["win_rate"]
+            scratch_curve.append({"steps": steps_done, "win_rate": wr})
+            print(f"  Scratch step {steps_done:>7,}: WR={wr:.1%}")
+
+            if scratch_threshold_steps is None and wr >= win_rate_threshold:
+                scratch_threshold_steps = steps_done
+                print(f"  Scratch reached {win_rate_threshold:.0%} at step {steps_done:,}!")
+
+    env.close()
+
+    # ---- Compute speedup ----
+    if scratch_threshold_steps is not None and transfer_threshold_steps == 0:
+        speedup = scratch_threshold_steps  # transfer needed 0 extra steps
+        speedup_str = f"{scratch_threshold_steps:,} scratch steps vs 0 transfer steps"
+    elif scratch_threshold_steps is not None and transfer_threshold_steps is not None:
+        speedup = scratch_threshold_steps / max(transfer_threshold_steps, 1)
+        speedup_str = f"{speedup:.1f}x speedup"
+    else:
+        speedup = None
+        speedup_str = f"scratch never reached {win_rate_threshold:.0%} in {max_total_steps:,} steps"
+
+    print(f"\n{'='*60}")
+    print(f"From-Scratch vs Transfer Summary")
+    print(f"  PPO→DQN zero-shot WR: {transfer_zero_shot_wr:.1%}")
+    if dagger_zero_shot_wr is not None:
+        print(f"  DAgger→DQN zero-shot WR: {dagger_zero_shot_wr:.1%}")
+    print(f"  DQN scratch threshold ({win_rate_threshold:.0%}): "
+          f"{'step ' + str(scratch_threshold_steps) if scratch_threshold_steps else 'not reached'}")
+    print(f"  Speedup: {speedup_str}")
+    print(f"{'='*60}\n")
+
+    # ---- Save ----
+    ensure_dir("results")
+    result = {
+        "win_rate_threshold": win_rate_threshold,
+        "gnugo_level": gnugo_level,
+        "n_eval_games": n_eval_games,
+        "seed": seed,
+        "transfer_zero_shot_wr": transfer_zero_shot_wr,
+        "dagger_zero_shot_wr": dagger_zero_shot_wr,
+        "scratch_threshold_steps": scratch_threshold_steps,
+        "transfer_threshold_steps": transfer_threshold_steps,
+        "speedup": speedup,
+        "scratch_learning_curve": scratch_curve,
+        "transfer_zero_shot_curve": transfer_curve,
+    }
+    out_path = "results/transfer_scratch_comparison.json"
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"Results saved to {out_path}")
+    return result
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Agent-to-Agent Concept Transfer")
@@ -605,9 +820,25 @@ if __name__ == "__main__":
                         help="Number of seeds for multi-seed mode (default: 5)")
     parser.add_argument("--n-eval", type=int, default=100,
                         help="Games per evaluation (default: 100)")
+    parser.add_argument("--scratch-comparison", action="store_true",
+                        help="Run from-scratch DQN vs PPO-transfer comparison")
+    parser.add_argument("--threshold", type=float, default=0.60,
+                        help="Win-rate threshold for speedup measurement (default: 0.60)")
+    parser.add_argument("--level", type=int, default=1,
+                        help="GnuGo level for scratch-comparison (default: 1)")
+    parser.add_argument("--gnugo-level", type=int, default=None,
+                        help="Evaluate multi-seed vs GnuGo at this level (default: random)")
     args = parser.parse_args()
 
-    if args.multi_seed:
-        run_multi_seed_experiment(n_seeds=args.n_seeds, n_eval=args.n_eval)
+    if args.scratch_comparison:
+        run_from_scratch_comparison(
+            win_rate_threshold=args.threshold,
+            gnugo_level=args.level,
+            n_eval_games=args.n_eval,
+            seed=42,
+        )
+    elif args.multi_seed:
+        run_multi_seed_experiment(n_seeds=args.n_seeds, n_eval=args.n_eval,
+                                  gnugo_level=args.gnugo_level)
     else:
         run_experiment(do_warm_start=args.warm_start, warm_start_gens=args.generations)

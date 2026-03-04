@@ -3,16 +3,16 @@
   "n_states": 200,
   "n_concepts": 64,
   "exact_match_rate": 0.0,
-  "pairwise_consistency": 0.056607142857142856,
-  "mean_unique_concepts": 6.685,
-  "median_unique_concepts": 7.0,
+  "pairwise_consistency": 0.10392857142857143,
+  "mean_unique_concepts": 5.675,
+  "median_unique_concepts": 6.0,
   "max_unique_concepts": 8,
   "unique_count_distribution": {
-    "8": 48,
-    "6": 42,
-    "5": 25,
-    "7": 79,
-    "3": 1,
-    "4": 5
+    "8": 14,
+    "6": 57,
+    "5": 47,
+    "4": 28,
+    "7": 43,
+    "3": 11
   }
 }

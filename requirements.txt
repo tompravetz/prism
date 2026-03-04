@@ -1,0 +1,22 @@
+# Core dependencies
+numpy>=1.24
+torch>=2.0
+gymnasium>=0.29
+stable-baselines3>=2.0
+sb3-contrib>=2.0          # MaskablePPO
+scikit-learn>=1.3
+scipy>=1.11
+matplotlib>=3.7
+tqdm
+
+# Atari extension
+ale-py>=0.9
+
+# Optional: PIDGIN extension (LLM-based concept naming)
+# anthropic>=0.20
+# sentence-transformers>=2.2
+# textgrad
+
+# Optional: video export for visualizer
+# imageio
+# imageio-ffmpeg

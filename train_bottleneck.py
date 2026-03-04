@@ -41,7 +41,9 @@ from src.networks import GoCNNEncoder, QNetwork
 from src.concept_manager import ConceptManager
 from src.concept_policy import (ConceptBottleneckPolicy, ConceptDQNPolicy,
                                  ConceptBottleneckAgent)
-from src.utils import set_seed, get_device, ensure_dir
+from src.utils import (set_seed, get_device, ensure_dir,
+                       CurriculumPhase, BOTTLENECK_CURRICULUM, DQN_CURRICULUM)
+from visualizer.opponents import GnuGoOpponent
 
 
 # ============================================================
@@ -528,6 +530,7 @@ class DQNBottleneckTrainer:
 # Main Training Loop (Generational)
 # ============================================================
 
+
 def discover_concepts(encoder, env, n_concepts=64, n_episodes=500,
                       save_path=None, device=None):
     """
@@ -604,35 +607,42 @@ def evaluate_agent(agent_fn, env, n_episodes=100):
 
 def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                      n_concepts=64, seed=42, save_dir="models/bottleneck",
-                     baseline_dir="models/baseline"):
+                     baseline_dir="models/baseline",
+                     phases=None, encoder_path=None, no_curriculum=False):
     """
     Main generational training loop for concept bottleneck agents.
 
     Each generation:
         1. Collect experience (rollout for PPO, episodes for DQN)
         2. Update the bottleneck policy
-        3. Evaluate against random opponent
-        4. Log metrics
+        3. Evaluate against the current curriculum phase's opponent
+        4. Check phase advancement and log metrics
 
     Args:
-        algo: "ppo" or "dqn"
+        algo:          "ppo" or "dqn"
         n_generations: Number of training generations.
         steps_per_gen: Training steps per generation.
-        n_concepts: Number of concept clusters.
-        seed: Random seed.
-        save_dir: Where to save bottleneck models.
-        baseline_dir: Where to load baseline encoders from.
+        n_concepts:    Number of concept clusters.
+        seed:          Random seed.
+        save_dir:      Where to save bottleneck models.
+        baseline_dir:  Where to load baseline encoders / models from.
+        phases:        List of CurriculumPhase.  None → BOTTLENECK_CURRICULUM.
+        encoder_path:  Override the encoder checkpoint path (e.g. for DAgger).
+        no_curriculum: If True, train against random opponent only (old behaviour).
     """
+    import json
+
     ensure_dir(save_dir)
     set_seed(seed)
     device = get_device()
     print(f"Device: {device}")
 
-    # ---- Load frozen encoder from baseline training ----
+    # ---- Load frozen encoder ----
     env = GoEnv(board_size=7)
     encoder = GoCNNEncoder(env.observation_space, features_dim=128)
 
-    encoder_path = os.path.join(baseline_dir, f"{algo}_go_encoder.pt")
+    if encoder_path is None:
+        encoder_path = os.path.join(baseline_dir, f"{algo}_go_encoder.pt")
     if os.path.exists(encoder_path):
         encoder.load_state_dict(
             torch.load(encoder_path, map_location=device, weights_only=True)
@@ -647,11 +657,9 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
     # ---- Stage 2: Discover concepts ----
     concept_path = os.path.join(save_dir, f"concepts_{algo}_k{n_concepts}.pkl")
     if os.path.exists(concept_path):
-        # Load previously discovered concepts
         cm = ConceptManager(n_concepts=n_concepts)
         cm.load(concept_path)
     else:
-        # Discover concepts from scratch
         print(f"\nDiscovering {n_concepts} concepts...")
         cm = discover_concepts(encoder, env, n_concepts=n_concepts,
                                n_episodes=500, save_path=concept_path,
@@ -659,6 +667,15 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
 
     # ---- Create trainer ----
     n_actions = env.action_count  # 50 for Go 7x7
+
+    if no_curriculum:
+        total_budget = n_generations * steps_per_gen
+    else:
+        if phases is None:
+            phases = list(BOTTLENECK_CURRICULUM)
+        else:
+            phases = list(phases)
+        total_budget = sum(p.max_steps for p in phases)
 
     if algo == "ppo":
         trainer = PPOBottleneckTrainer(
@@ -670,15 +687,55 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
         trainer = DQNBottleneckTrainer(
             encoder=encoder, concept_manager=cm,
             n_actions=n_actions, n_concepts=n_concepts,
-            lr=1e-4, gamma=0.99, device=device,
+            lr=1e-4, gamma=0.99,
+            epsilon_decay=total_budget // 2,
+            device=device,
         )
     else:
         raise ValueError(f"Unknown algorithm: {algo}")
 
     eval_env = GoEnv(board_size=7)
 
+    # ---- Curriculum state ----
+    if no_curriculum:
+        phase_idx = 0
+        steps_in_phase = 0
+        current_gnugo = None
+        current_phase_name = "random"
+    else:
+        phase_idx = 0
+        steps_in_phase = 0
+        current_gnugo = None
+
+        def _apply_phase(idx):
+            nonlocal current_gnugo
+            if current_gnugo is not None:
+                current_gnugo.close()
+                current_gnugo = None
+
+            phase = phases[idx]
+            if phase.gnugo_level is None:
+                env.opponent_fn = env._random_opponent
+                eval_env.opponent_fn = eval_env._random_opponent
+            elif isinstance(phase.gnugo_level, int):
+                # Bottleneck training: train/eval happen sequentially (no mid-episode
+                # collision), so one GnuGoOpponent process is sufficient for both envs.
+                current_gnugo = GnuGoOpponent(level=phase.gnugo_level)
+                env.opponent_fn = current_gnugo
+                eval_env.opponent_fn = current_gnugo
+
+            opp_str = (f"GnuGo Level {phase.gnugo_level}"
+                       if isinstance(phase.gnugo_level, int)
+                       else "random")
+            print(f"\n[Curriculum] Bottleneck phase '{phase.name}' started  "
+                  f"(opponent={opp_str}, max_steps={phase.max_steps:,})")
+
+        _apply_phase(0)
+
     # ---- Generational training loop ----
-    print(f"\nTraining {algo.upper()} bottleneck for {n_generations} generations...")
+    mode_str = "random-only" if no_curriculum else f"curriculum ({len(phases)} phases)"
+    print(f"\nTraining {algo.upper()} bottleneck — {mode_str}  "
+          f"[{n_generations} gens × {steps_per_gen:,} steps/gen]...")
     best_win_rate = 0.0
     metrics_history = []
 
@@ -686,13 +743,11 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
         gen_start = time.time()
 
         if algo == "ppo":
-            # PPO: collect a rollout, then update
             rollout = trainer.collect_rollout(env, n_steps=steps_per_gen)
             loss = trainer.update(rollout)
             episode_rewards = rollout["episode_rewards"]
 
         elif algo == "dqn":
-            # DQN: interleave data collection and updates
             episode_rewards = []
             obs, info = env.reset()
             ep_reward = 0.0
@@ -710,12 +765,11 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                 next_mask = next_info.get(
                     "action_mask",
                     np.zeros(n_actions, dtype=np.int8) if done
-                    else np.ones(n_actions, dtype=np.int8)
+                    else np.ones(n_actions, dtype=np.int8),
                 )
 
                 trainer.store_transition(concept, action, reward,
                                          next_concept, done, mask, next_mask)
-
                 loss = trainer.update()
                 ep_reward += reward
                 steps += 1
@@ -728,9 +782,7 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                     obs = next_obs
                     info = next_info
 
-        # ---- Evaluate (always against random for consistent measurement) ----
-        eval_env.opponent_fn = eval_env._random_opponent
-
+        # ---- Evaluate (against current phase's opponent) ----
         if algo == "ppo":
             def agent_fn(obs, mask):
                 c = trainer.get_concept(obs)
@@ -740,15 +792,17 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
                 c = trainer.get_concept(obs)
                 return trainer.q_net.get_action(c, mask, epsilon=0.0)
 
-        eval_results = evaluate_agent(agent_fn, eval_env, n_episodes=50)
+        eval_results = evaluate_agent(agent_fn, eval_env, n_episodes=200)
         win_rate = eval_results["win_rate"]
         best_win_rate = max(best_win_rate, win_rate)
 
         gen_time = time.time() - gen_start
         avg_reward = np.mean(episode_rewards) if episode_rewards else 0.0
+        current_phase_name = "random" if no_curriculum else phases[phase_idx].name
 
         metrics = {
             "generation": gen,
+            "phase": current_phase_name,
             "win_rate": win_rate,
             "best_win_rate": best_win_rate,
             "avg_reward": avg_reward,
@@ -757,31 +811,45 @@ def train_bottleneck(algo="ppo", n_generations=100, steps_per_gen=20_000,
         }
         metrics_history.append(metrics)
 
-        # Print progress every 5 generations
         if gen % 5 == 0 or gen == n_generations - 1:
-            eps_str = f"eps={trainer.epsilon:.3f}" if algo == "dqn" else ""
+            eps_str = f" | ε={trainer.epsilon:.3f}" if algo == "dqn" else ""
             print(f"  Gen {gen:3d}/{n_generations} | "
+                  f"[{current_phase_name}] "
                   f"Win={win_rate:.2%} (best={best_win_rate:.2%}) | "
-                  f"Avg R={avg_reward:.3f} | "
-                  f"Eps={len(episode_rewards)} | "
-                  f"{eps_str} "
+                  f"Avg R={avg_reward:.3f}{eps_str} | "
                   f"Time={gen_time:.1f}s")
 
-        # Save checkpoint periodically
         if gen % 20 == 0 or gen == n_generations - 1:
             policy_state = (trainer.policy.state_dict() if algo == "ppo"
-                           else trainer.q_net.state_dict())
-            checkpoint_path = os.path.join(save_dir, f"{algo}_bottleneck_gen{gen:04d}.pt")
-            torch.save(policy_state, checkpoint_path)
+                            else trainer.q_net.state_dict())
+            ckpt = os.path.join(save_dir, f"{algo}_bottleneck_gen{gen:04d}.pt")
+            torch.save(policy_state, ckpt)
 
+        # ---- Phase advancement (curriculum only) ----
+        if not no_curriculum:
+            steps_in_phase += steps_per_gen
+            phase = phases[phase_idx]
 
-    # ---- Save final model and strategy memory ----
+            if steps_in_phase >= phase.max_steps:
+                print(f"  [Curriculum] Phase '{phase.name}' done (max steps)")
+
+                if phase_idx + 1 < len(phases):
+                    phase_idx += 1
+                    steps_in_phase = 0
+                    _apply_phase(phase_idx)
+                else:
+                    print("  [Curriculum] All phases exhausted; "
+                          "continuing on last phase.")
+
+    # ---- Cleanup ----
+    if not no_curriculum and current_gnugo is not None:
+        current_gnugo.close()
+
+    # ---- Save final model ----
     final_state = (trainer.policy.state_dict() if algo == "ppo"
-                  else trainer.q_net.state_dict())
+                   else trainer.q_net.state_dict())
     torch.save(final_state, os.path.join(save_dir, f"{algo}_bottleneck_final.pt"))
 
-    # Save metrics history
-    import json
     with open(os.path.join(save_dir, f"metrics_{algo}.json"), "w") as f:
         json.dump(metrics_history, f, indent=2)
 
@@ -801,7 +869,8 @@ def main():
                         choices=["ppo", "dqn", "both"],
                         help="Algorithm for bottleneck policy")
     parser.add_argument("--generations", type=int, default=100,
-                        help="Number of training generations")
+                        help="Number of training generations "
+                             "(used only with --no-curriculum)")
     parser.add_argument("--steps-per-gen", type=int, default=20_000,
                         help="Training steps per generation")
     parser.add_argument("--n-concepts", type=int, default=64,
@@ -812,23 +881,44 @@ def main():
                         help="Directory to save bottleneck models")
     parser.add_argument("--baseline-dir", type=str, default="models/baseline",
                         help="Directory with trained baseline models")
+    parser.add_argument("--encoder-path", type=str, default=None,
+                        help="Override encoder checkpoint path "
+                             "(e.g. models/cloned_dagger/ppo_go_encoder.pt)")
+    parser.add_argument("--no-curriculum", action="store_true",
+                        help="Train against random opponent only (no curriculum)")
     args = parser.parse_args()
 
     algos = [args.algo] if args.algo != "both" else ["ppo", "dqn"]
 
     for algo in algos:
         print(f"\n{'='*60}")
-        print(f"Training {algo.upper()} Concept Bottleneck")
+        print(f"Training {algo.upper()} Concept Bottleneck"
+              + (" (random-only)" if args.no_curriculum else " (adaptive curriculum)"))
         print(f"{'='*60}")
+
+        curriculum = DQN_CURRICULUM if algo == "dqn" else BOTTLENECK_CURRICULUM
+        if args.no_curriculum:
+            n_gens = args.generations
+        else:
+            import math
+            n_gens = math.ceil(
+                sum(p.max_steps for p in curriculum) / args.steps_per_gen
+            )
+            print(f"  [Curriculum] {n_gens} generations required "
+                  f"({sum(p.max_steps for p in curriculum):,} steps "
+                  f"/ {args.steps_per_gen:,} steps-per-gen).")
 
         train_bottleneck(
             algo=algo,
-            n_generations=args.generations,
+            n_generations=n_gens,
             steps_per_gen=args.steps_per_gen,
             n_concepts=args.n_concepts,
             seed=args.seed,
             save_dir=args.save_dir,
             baseline_dir=args.baseline_dir,
+            encoder_path=args.encoder_path,
+            no_curriculum=args.no_curriculum,
+            phases=curriculum if not args.no_curriculum else None,
         )
 
 

@@ -6,6 +6,9 @@ Board rendering, seeding, device selection, logging helpers.
 
 import os
 import random
+from dataclasses import dataclass
+from typing import List, Optional, Union
+
 import numpy as np
 import torch
 
@@ -94,6 +97,56 @@ def action_to_coord(action, board_size=7):
 def coord_to_action(row, col, board_size=7):
     """Convert (row, col) to flat action index."""
     return row * board_size + col
+
+
+# ============================================================
+# Curriculum Training
+# ============================================================
+
+@dataclass
+class CurriculumPhase:
+    """
+    One phase in a fixed-schedule curriculum.
+
+    Attributes:
+        name:        Human-readable label (used in logs and metrics JSON).
+        gnugo_level: Opponent spec:
+                       None → internal random opponent
+                       int  → GnuGo at that strength level
+        max_steps:   Training steps to spend in this phase before advancing.
+    """
+    name: str
+    gnugo_level: Optional[Union[int, str]]
+    max_steps: int
+
+
+# Shared curriculum for both baseline and bottleneck agents.
+# Fixed-duration phases ensure both agents receive identical training
+# distributions, making the performance gap a clean measure of the
+# interpretability cost of the concept bottleneck.
+BASELINE_CURRICULUM: List[CurriculumPhase] = [
+    CurriculumPhase("random",  None, 300_000),
+    CurriculumPhase("gnugo_1", 1,    400_000),
+    CurriculumPhase("gnugo_2", 2,    500_000),
+    CurriculumPhase("gnugo_3", 3,    600_000),
+    CurriculumPhase("gnugo_4", 4,    700_000),
+    CurriculumPhase("gnugo_5", 5,    900_000),
+]
+
+# Scaled-down curriculum for DQN baseline.  GnuGo's sequential GTP calls
+# make DQN ~5× slower than SB3-vectorised PPO at high levels (L4/L5 ≈ 5–8 fps
+# vs PPO's 40 fps).  Fewer steps per phase keeps total wall-clock time to ~24 h
+# while still exposing the encoder to all five opponent strengths.
+DQN_CURRICULUM: List[CurriculumPhase] = [
+    CurriculumPhase("random",  None, 150_000),
+    CurriculumPhase("gnugo_1", 1,    200_000),
+    CurriculumPhase("gnugo_2", 2,    250_000),
+    CurriculumPhase("gnugo_3", 3,    300_000),
+    CurriculumPhase("gnugo_4", 4,    150_000),
+    CurriculumPhase("gnugo_5", 5,    100_000),
+]  # Total: 1,150,000 steps
+
+BOTTLENECK_CURRICULUM = BASELINE_CURRICULUM
 
 
 class RunningStats:
