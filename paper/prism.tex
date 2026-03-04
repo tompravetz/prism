@@ -15,7 +15,7 @@
 \usepackage{natbib}
 \usepackage{enumitem}
 
-\graphicspath{{}{results/figures/}}
+\graphicspath{{figures/}}
 
 \hypersetup{
     colorlinks=true,
@@ -44,7 +44,7 @@ Thomas Pravetz\\
 % Abstract
 % ============================================================
 \begin{abstract}
-We present \prism{} (\textbf{P}olicy \textbf{R}euse via \textbf{I}nterpretable \textbf{S}trategy \textbf{M}apping), a framework that grounds reinforcement learning agents' decisions in discrete, causally validated concepts and uses those concepts as a zero-shot transfer interface between agents trained with different algorithms. \prism{} clusters each agent's encoder features into $K$ concepts via K-means. Causal intervention establishes that these concepts directly drive---not merely correlate with---agent behavior: overriding concept assignments changes the selected action in 69.4\% of interventions ($p = 8.6 \times 10^{-86}$, 2500 interventions). Ablating the single most-used concept collapses PPO win rate from 100\% to 51.8\%---a non-obvious asymmetry between usage frequency and strategic importance. Because concepts causally encode strategy, aligning them via optimal bipartite matching transfers strategic knowledge zero-shot. On Go~7$\times$7 with three independently trained agents, concept transfer achieves 69.5\%\,$\pm$\,3.2\% and 76.4\%\,$\pm$\,3.4\% win rate against a standard engine across the two successful transfer pairs (10 seeds), compared to 3.5\% for a random agent and 9.2\% without alignment. Transfer succeeds when the source policy is strong; geometric alignment quality predicts nothing ($R^2 \approx 0$). The framework is scoped to domains where strategic state is naturally discrete: the identical pipeline on Atari Breakout yields bottleneck policies at random-agent performance, confirming that the Go results reflect a structural property of the domain.
+We present \prism{} (\textbf{P}olicy \textbf{R}euse via \textbf{I}nterpretable \textbf{S}trategy \textbf{M}apping), a framework that grounds reinforcement learning agents' decisions in discrete, causally validated concepts and uses those concepts as a zero-shot transfer interface between agents trained with different algorithms. \prism{} clusters each agent's encoder features into $K$ concepts via K-means. Causal intervention establishes that these concepts directly drive---not merely correlate with---agent behavior: overriding concept assignments changes the selected action in 69.4\% of interventions ($p = 8.6 \times 10^{-86}$, 2500 interventions). Concept importance and usage frequency are dissociated: the most-used concept (C47, 33.0\% frequency) causes only a 9.4\% win-rate drop when ablated, while ablating C16 (15.4\% frequency) collapses win rate from 100\% to 51.8\%. Because concepts causally encode strategy, aligning them via optimal bipartite matching transfers strategic knowledge zero-shot. On Go~7$\times$7 with three independently trained agents, concept transfer achieves 69.5\%\,$\pm$\,3.2\% and 76.4\%\,$\pm$\,3.4\% win rate against a standard engine across the two successful transfer pairs (10 seeds), compared to 3.5\% for a random agent and 9.2\% without alignment. Transfer succeeds when the source policy is strong; geometric alignment quality predicts nothing ($R^2 \approx 0$). The framework is scoped to domains where strategic state is naturally discrete: the identical pipeline on Atari Breakout yields bottleneck policies at random-agent performance, confirming that the Go results reflect a structural property of the domain.
 \end{abstract}
 
 \textbf{Keywords:} Reinforcement Learning, Transfer Learning, Concept Bottleneck Models, Interpretability, Knowledge Reuse
@@ -62,7 +62,7 @@ The core obstacle is representation. Neural network features are entangled and a
 
 Our contributions are:
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Causally grounded discrete concepts}: Intervention experiments establish that K-means concepts derived from RL encoder features causally drive agent decisions (69.4\% action-change rate, $p = 8.6 \times 10^{-86}$). Ablation further reveals that concepts have highly unequal strategic importance: the most-used concept (C47) is not the most critical (C16), whose ablation collapses win rate from 100\% to 51.8\%.
+    \item \textbf{Causally grounded discrete concepts}: Intervention experiments establish that K-means concepts derived from RL encoder features causally drive agent decisions (69.4\% action-change rate, $p = 8.6 \times 10^{-86}$). Ablation reveals a dissociation between concept frequency and strategic importance: the most-used concept (C47, 33.0\% frequency) causes only a 9.4\% win-rate drop when ablated, while the strategically critical concept (C16, 15.4\% frequency) collapses win rate from 100\% to 51.8\%.
     \item \textbf{Zero-shot cross-algorithm transfer}: Because concepts causally encode strategic decisions, aligning them across agents transfers knowledge zero-shot. PPO$\to$DQN and BC$\to$DQN achieve 69.5\% and 76.4\% win rate, compared to 9.2\% without alignment and 3.5\% for a random agent.
     \item \textbf{Source quality as the dominant factor}: Transfer success is determined by whether the source policy is strong---alignment quality between concept spaces does not predict transfer quality ($R^2 \approx 0$). A weak DQN source fails to transfer to a strong target.
     \item \textbf{Scope characterization}: The identical pipeline on Atari Breakout fails completely (bottleneck at random-agent performance), establishing that PRISM is scoped to domains with naturally discrete strategic structure, and defining this as an empirical boundary condition rather than a design choice.
@@ -208,25 +208,24 @@ To determine whether the choice of alignment algorithm matters, we evaluated fou
 
 \begin{table}[t]
 \centering
-\caption{Alignment method comparison for PPO$\to$DQN, 5 seeds $\times$ 50 games. Win rates $\pm$ std. Pairwise Welch's $t$-test vs.\ Hungarian; $^*p < 0.05$.}
+\caption{Alignment method comparison for PPO$\to$DQN, 5 seeds $\times$ 50 games. Win rates $\pm$ std. Pairwise Welch's $t$-test vs.\ Hungarian; $^*p < 0.05$. $^\dagger$Greedy NN is degenerate: all source concepts map to one target concept, producing a fixed-action policy (mean game length 48.9 moves vs.\ 27.5 for Hungarian).}
 \label{tab:alignment}
 \begin{tabular}{lccc}
 \toprule
 \textbf{Method} & \textbf{Type} & \textbf{Win Rate} & \textbf{$p$ vs.\ Hungarian} \\
 \midrule
-Hungarian (PRISM)    & 1:1 optimal   & \textbf{68.8\%} $\pm$ 5.4\% & --- \\
-Procrustes + Hungarian & 1:1 rotated & 51.6\% $\pm$ 8.3\% & 0.032$^*$ \\
-Random permutation   & 1:1 random    & 50.7\% $\pm$ 39.0\% & 0.28 \\
-Identity (no alignment) & 1:1 trivial & 9.2\% $\pm$ 4.0\% & $<$0.001$^*$ \\
+Greedy NN$^\dagger$      & 1:1 greedy    & 97.2\% $\pm$ 1.6\% & $<$0.001$^*$ \\
+Hungarian (PRISM)    & 1:1 optimal   & \textbf{68.8\%} $\pm$ 4.7\% & --- \\
+Procrustes           & 1:1 rotated   & 51.6\% $\pm$ 6.4\% & 0.003$^*$ \\
+Random permutation   & 1:1 random    & 48.4\% $\pm$ 33.7\% & 0.29 \\
+Identity (no alignment) & 1:1 trivial & 9.2\% $\pm$ 3.0\% & $<$0.001$^*$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Three results stand out (Table~\ref{tab:alignment}). First, no alignment (identity mapping) collapses to 9.2\%---near the random agent floor---confirming that alignment is not optional. Second, Hungarian matching outperforms all alternatives. Third, random permutation has a mean near 50\% but a standard deviation of 39\%: individual seeds range from 0\% (degenerate, all actions collapse to pass) to 95\% (lucky permutation). The mean obscures the core finding that random alignment is unreliable---it is a lottery, not a method.
+Four results stand out (Table~\ref{tab:alignment}). First, no alignment (identity mapping) collapses to 9.2\%---near the random agent floor---confirming that alignment is not optional. Second, Hungarian matching outperforms Procrustes and random permutation. Third, random permutation has a mean near 50\% but a standard deviation of 33.7\%: individual seeds range from 0\% (degenerate) to 96\% (lucky permutation). The mean obscures the core finding that random alignment is unreliable---it is a lottery, not a method. Fourth, greedy nearest-neighbor alignment achieves 97.2\%, but this is degenerate: all 64 source concepts map to the same single target concept, so the policy outputs one fixed action regardless of board state. The high win rate reflects a constant-action strategy that happens to work on 7$\times$7; it is not strategic transfer. We include it in Table~\ref{tab:alignment} for completeness.
 
-A fifth candidate, greedy nearest-neighbor alignment, was excluded after discovering it produces a degenerate many-to-one mapping in this setting: all 64 source concepts are assigned to the same single target concept. The resulting policy achieves high apparent win rate by outputting one fixed action for every board state, which is not a meaningful transfer result.
-
-Procrustes alignment (orthogonal rotation of source centroids before Hungarian matching) performs significantly worse than plain Hungarian (51.6\% vs.\ 68.8\%, $p=0.032$). On the same-task, same-domain setting here, rotating the source centroid cloud appears to distort the correspondence rather than improve it.
+Procrustes alignment (orthogonal rotation of source centroids before Hungarian matching) performs significantly worse than plain Hungarian (51.6\% vs.\ 68.8\%, $p=0.003$). On the same-task, same-domain setting here, rotating the source centroid cloud distorts the correspondence rather than improving it.
 
 \subsection{Transfer Baselines}
 \label{sec:baselines}
@@ -251,6 +250,13 @@ Random mapping (3 seeds)     & 57\%, 95\%, 0\%               & No \\
 \end{table}
 
 \prism{} achieves 69.5\% with no training. A policy trained from scratch on DQN concepts starts at 0\%, reaches approximately 52\% after 10 generations ($\approx$200K steps of training against a random opponent evaluated against GnuGo), and converges to $\approx$72\% after 50 generations---with substantial noise throughout (the learning curve oscillates between 12\% and 80\%).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{fig_finetune}
+\caption{Fine-tuning after zero-shot transfer. Both conditions run REINFORCE on the DQN concept bottleneck; they differ only in initialization. The transferred policy crosses 60\% at generation~5 (50K steps); the from-scratch policy reaches 27\% at generation~40 (400K steps) without crossing the threshold. Single seed; treat magnitude as indicative.}
+\label{fig:finetune}
+\end{figure}
 
 \paragraph{Fine-tuning.}
 The zero-shot result is an initialization, not a ceiling. We fine-tuned the transferred policy using REINFORCE on the DQN concept bottleneck and ran an identical REINFORCE training run from a randomly initialized bottleneck (40 generations, 10K steps each, evaluated every 5 generations against GnuGo, 100 games per checkpoint). The transferred policy reaches 60\% win rate at generation~5 (50K steps). The from-scratch policy reaches only 27\% at generation 40 (400K steps) and does not cross the 60\% threshold within this budget. The peak fine-tuned result is 83\% at generation~15 (150K steps). This comparison is internally controlled: both conditions use the same algorithm (REINFORCE on the concept bottleneck) and differ only in initialization. The 8$\times$ step advantage to the 60\% threshold demonstrates that PRISM's zero-shot transfer provides a useful initialization that substantially reduces subsequent RL training cost. This comparison uses a single seed; the direction of the result is clear, but the magnitude should be treated as indicative rather than precise.
@@ -280,6 +286,13 @@ For PPO the two are within noise. For DQN the bottleneck appears higher, which l
 \paragraph{Causal intervention.}
 We test whether concept assignments \emph{cause} action choices by overriding each state's assigned concept with five alternative concepts and measuring how often the chosen action changes (500 states, 5 alternatives each, 2500 interventions total). The action changes in 69.4\% of interventions ($p = 8.6 \times 10^{-86}$, binomial test against the null that concept assignment does not affect action choice). The distribution is heavy-tailed: median per-state change rate is 80\%, but some states are insensitive ($\mathrm{std} = 0.31$), indicating that some board positions constrain the available moves sufficiently that concept identity matters less.
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{fig_ablation}
+\caption{Concept ablation: frequency vs.\ win-rate drop when ablated. C16 (15.4\% frequency) causes a 48.2\,pp drop; C47 (33.0\% frequency, the most-used concept) causes only a 9.4\,pp drop. Three concepts improve win rate when removed (negative drop), suggesting they encode suboptimal patterns.}
+\label{fig:ablation}
+\end{figure}
+
 \paragraph{Concept ablation.}
 Table~\ref{tab:ablation} reports the impact of suppressing individual concepts (replacing their action with a uniform random legal move). The baseline bottleneck achieves 100\% win rate against GnuGo; concept C16, active in 15.4\% of states, reduces this to 51.8\% when ablated---near the random agent floor. Three further concepts produce significant but smaller drops (7--9\%). The remaining 60 tested concepts produce drops under 5\%. Two features of this distribution are notable: the most-used concept (C47, 33.0\% frequency) produces only a 9.4\% drop, while the critical concept (C16, 15.4\%) produces a 48.2\% drop---concept frequency and strategic importance are not aligned.
 
@@ -302,6 +315,22 @@ C6  & 4.6\%  & 92.8\% & 7.2\% \\
 \paragraph{Stability.}
 Repeating the K-means fit with three different random seeds on the same feature corpus yields a cross-seed ARI of $0.214 \pm 0.009$ and NMI of $0.587 \pm 0.004$. The gap between these two metrics is informative. ARI penalizes any pairwise assignment disagreement, including points near cluster boundaries that land differently across runs. NMI measures the shared information between two partitions, normalized by their entropies, without penalizing relabeling or boundary noise. An NMI of 0.587 indicates that points which cluster together in one initialization tend to cluster together in others: the partition \emph{structure} is substantially shared across seeds even though individual cluster labels are not. This is consistent with K-means finding different orientations of a stable underlying geometric structure in feature space rather than discovering fundamentally different groupings. Perturbation robustness within a single fixed run is 0.999 under Gaussian noise $\sigma{=}0.1$. The practical consequence is that the specific integer label assigned to a concept is an initialization artifact---its strategic content is not---and reported results should be interpreted relative to a fixed trained model.
 
+\subsection{K Sensitivity}
+\label{sec:k_sensitivity}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{fig_k_sweep}
+\caption{Win rate vs.\ $K$ (number of concepts) at 300K training steps against GnuGo L3. Transfer performance peaks at $K{=}32$ (76\%); direct bottleneck performance is higher at $K{=}8$ and $K{=}64$. The paper uses $K{=}64$ based on direct performance at full training (3.4M steps), where larger $K$ captures finer-grained structure. Results at 300K steps are not directly comparable to Table~\ref{tab:agent_transfer} (full curriculum).}
+\label{fig:k_sweep}
+\end{figure}
+
+To understand sensitivity to the number of concepts $K$, we trained PPO bottlenecks with $K \in \{8, 16, 32, 64, 128\}$ using 300K training steps against GnuGo L3 and measured both direct win rate and PPO$\to$DQN transfer win rate (50 games each). Results are shown in Figure~\ref{fig:k_sweep}.
+
+Transfer win rate follows an inverted-U over $K$, peaking at $K{=}32$ (76\%) and collapsing at $K{=}128$ (0\%). Fewer concepts create a coarser, more generalizable partitioning of state space that aligns well across agents; too many concepts produce a fine-grained decomposition where individual cluster centroids are less reproducible across different training runs, making alignment harder. Direct win rate is highest at $K{=}8$ and $K{=}64$ under the 300K budget, though neither is the best transfer point. The choice of $K$ involves a tradeoff: lower $K$ favors transfer, higher $K$ supports finer-grained direct performance at full training.
+
+The paper uses $K{=}64$ throughout based on its direct performance at the full 3.4M-step curriculum, where the training budget is sufficient to populate all 64 clusters meaningfully. A practitioner targeting transfer rather than direct performance should consider $K{=}32$ or lower.
+
 % ============================================================
 % 6. Discussion
 % ============================================================
@@ -317,7 +346,7 @@ A \emph{concept coverage} account explains why source strength is the operative 
 DQN received 57 generational training steps versus 169 for PPO---roughly one-third the compute. Its native win rate ($\approx$64\%) substantially trails PPO ($\approx$99\%). This gap was intentional: we wanted agents of different strength to test whether transfer quality tracks source capability. It does. Had DQN been trained to PPO-level performance, DQN$\to$PPO transfer might succeed; that remains an open question.
 
 \paragraph{Why alignment method matters but alignment quality does not.}
-Two findings in Section~\ref{sec:alignment_comparison} appear to be in tension: alignment method matters significantly (Hungarian 68.8\% vs.\ Procrustes 51.6\%, $p=0.032$; vs.\ identity 9.2\%, $p<0.001$), yet the alignment quality metric---normalized centroid similarity after alignment---explains nothing ($R^2 \approx 0$). The resolution lies in what each quantity measures. Alignment \emph{quality} captures geometric proximity: whether the two centroid clouds are close in feature space after alignment. Alignment \emph{method} determines whether strategic pairings are semantically consistent: whether the ``blocking'' concept in the source maps to the ``blocking'' concept in the target. Hungarian matching finds the optimal permutation regardless of global geometry---two agents can have learned the same strategic categories from different initializations, placing their centroid clouds far apart globally, yet still admit a consistent pairwise mapping. Procrustes applies a global rotation first; this helps when the correspondence is a rotation, but hurts when it is a permutation, distorting the pairing. Geometric closeness in feature space is neither necessary nor sufficient for a good strategic correspondence. This is why the method matters (wrong method destroys valid pairings) while the quality metric, which measures something orthogonal to pairing quality, predicts nothing.
+Two findings in Section~\ref{sec:alignment_comparison} appear to be in tension: alignment method matters significantly (Hungarian 68.8\% vs.\ Procrustes 51.6\%, $p=0.003$; vs.\ identity 9.2\%, $p<0.001$), yet the alignment quality metric---normalized centroid similarity after alignment---explains nothing ($R^2 \approx 0$). The resolution lies in what each quantity measures. Alignment \emph{quality} captures geometric proximity: whether the two centroid clouds are close in feature space after alignment. Alignment \emph{method} determines whether strategic pairings are semantically consistent: whether the ``blocking'' concept in the source maps to the ``blocking'' concept in the target. Hungarian matching finds the optimal permutation regardless of global geometry---two agents can have learned the same strategic categories from different initializations, placing their centroid clouds far apart globally, yet still admit a consistent pairwise mapping. Procrustes applies a global rotation first; this helps when the correspondence is a rotation, but hurts when it is a permutation, distorting the pairing. Geometric closeness in feature space is neither necessary nor sufficient for a good strategic correspondence. This is why the method matters (wrong method destroys valid pairings) while the quality metric, which measures something orthogonal to pairing quality, predicts nothing.
 
 \paragraph{GnuGo as a benchmark on 7$\times$7.}
 GnuGo's level parameter modulates search depth for 19$\times$19 play. On a 7$\times$7 board the parameter has no consistent effect---a random agent achieves identical win rates against levels 1, 5, and 10. All our results therefore compare against a single fixed opponent, not a difficulty ladder. This limits our ability to characterize agent strength relative to \emph{GnuGo's} capability range, but does not affect any transfer comparison since all experiments use the same opponent configuration.
@@ -342,7 +371,7 @@ This study uses a single game domain (Go 7$\times$7) with three agents, one of w
 
 The central finding is that transfer quality depends on source policy strength, not on the geometric alignment between concept spaces. This has a practical implication: when selecting a source agent for transfer, optimize for policy quality, not for concept similarity to the target.
 
-The discrete concept interface opens a path beyond machine-to-machine transfer. Because concepts causally drive behavior and are represented as fixed-dimensional embeddings, they can in principle be paired with natural language descriptions --- moving from a system where concepts are shared between agents to one where they are explained to humans. This would shift the desideratum from geometric alignability to linguistic describability, a different and complementary research direction.
+The concept bottleneck structure extends naturally beyond machine-to-machine transfer. Because concepts causally drive behavior and are represented as fixed-dimensional embeddings, they can in principle be paired with natural language descriptions --- moving from a system where concepts are shared between agents to one where they are explained to humans. This would shift the desideratum from geometric alignability to linguistic describability, a different and complementary research direction.
 
 % ============================================================
 % References
